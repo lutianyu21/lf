@@ -1,0 +1,16 @@
+**/SaProt
+**/progen
+**/dplm
+**/checkpoints
+**/__pycache__
+**/data
+**/pytest
+
+/trash
+/wandb
+**/dplm
+**/progen
+
+*.ipynb
+*.txt
+*.log
