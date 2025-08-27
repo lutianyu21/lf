@@ -1,0 +1,17 @@
+defaults:
+  - _self_
+  - dataset: pdb
+  - lm: progen2
+  - trainer: progen2
+
+name: progen2-dplm2-seq
+trainer:
+  output_dir: /AIRvePFS/ai4science/users/tianyu/LLMFolding-structure/output/checkpoints/seq
+dataset:
+  train_task: seq_lm
+  eval_task: folding_lm
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

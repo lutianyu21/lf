@@ -1,7 +1,7 @@
 import functools
 import warnings
 from multiprocessing import process
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Tuple
 import hydra
 import torch
 import os
@@ -85,58 +85,76 @@ class TrainerWithCustomEval(Trainer):
         logits_processor = DynamicMultimodalLogitsProcessor(**self.processor.constant_helper(), batch_length=lengths.tolist())
         generated_tokens = model.generate(
             input_ids=inputs["input_ids"],
-            attention_mask=inputs.get("attention_mask", None),
+            attention_mask=inputs["attention_mask"],
             logits_processor=[logits_processor],
             generation_config=self.generation_config,
         )
         model.train()
-        # inputs:           <bos><boseq>xxx<eoseq><bostruct>
-        # labels:           <bos><boseq>xxx<eoseq><bostruct>xxx<eostruct><eos>
-        # generated_tokens: <bos>......<boseq>xxx<eoseq><bostruct>xxx<eostruct>eos>
+        
+        # to keep padding consistent
+        constant = self.processor.constant_helper()
+        generated_tokens = torch.where(generated_tokens == constant['pad_token'], -100, generated_tokens)
+        
         return (None, generated_tokens, labels)
+
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        return_outputs=False
+    ):
+        outputs = model(**inputs)
+        log_dict = {}
+        if (seq_loss := outputs.seq_loss) is not None:
+            log_dict["seq_loss"] = seq_loss.detach().cpu().item()
+        if (struct_loss := outputs.struct_loss) is not None:
+            log_dict["struct_loss"] = struct_loss.detach().cpu().item()
+        if log_dict:
+            self.log(log_dict)
+        return (outputs.loss, outputs) if return_outputs else outputs.loss
+
+
+
+def compute_generation_metrics(eval_preds, dplm_processor: DPLMProcessor):
     
-
-def compute_folding_metrics(eval_preds, dplm_processor: DPLMProcessor):
-    # cpu inputs, preds as generated tokens rather than logits
-    # gpu-main process
-    preds, labels = eval_preds.predictions, eval_preds.label_ids
-    rmsd, acc = [], []
-    for pred, label in zip(preds, labels):
-        pred_wo_pad, label_wo_pad = pred[pred != -100], label[label != -100]
-        _, _, pred_structure_list = dplm_processor.decode(pred_wo_pad.tolist())
+    rmsd, acc, length = [], [], []
+    gen_ids:   torch.Tensor = eval_preds.predictions
+    label_ids: torch.Tensor = eval_preds.label_ids
+    assert label_ids.shape == gen_ids.shape
+    
+    for i, (token, label) in enumerate(zip(gen_ids, label_ids)):
+        
+        gen_wo_pad, label_wo_pad = token[token != -100], label[label != -100]
+        _, _, gen_structure_list = dplm_processor.decode(gen_wo_pad.tolist())
         _, _, label_structure_list = dplm_processor.decode(label_wo_pad.tolist())
-        if len(pred_structure_list) > 1:
+        if len(gen_structure_list) > 1:
             warnings.warn('prediction contains multiple structures, only the first one will be used')
-        pred_structure_str, pred_structure = pred_structure_list[0]
-        label_structure_str, label_strcuture = label_structure_list[0]
+            
+        gen_structure:   Tuple[str, OpenfoldEntity] = gen_structure_list[0]
+        label_structure: Tuple[str, OpenfoldEntity] = label_structure_list[0]
         
-        # rmsd
-        rmsd.append(dplm_processor.compute_rmsd(pred_structure, label_strcuture))
-        
-        # token accuracy
-        acc.append(dplm_processor.compute_acc(pred_structure_str, label_structure_str))
+        length.append(len(str(gen_structure[1])))
+        acc.append(dplm_processor.compute_acc(gen_structure[0], label_structure[0]))
+        rmsd.append(dplm_processor.compute_rmsd(gen_structure[1], label_structure[1]))
+        # HINT: this rmsd ignores reconstruction error of structure-tokenizer
+            
     return {
-        "rmsd": np.mean(rmsd),
-        "acc":  np.mean(acc),
+        "rmsd":     np.mean(rmsd),
+        "acc":      np.mean(acc),
+        "length":   np.mean(length)
     }
-
-
-
-
-
-
-
-
 
 
 @hydra.main(version_base=None, config_path="./config", config_name="config.yaml")
 def main(cfg: DictConfig):
-    
     wandb.init(project="LLMFolding", name=cfg.name, config=OmegaConf.to_container(cfg, resolve=True)) # type: ignore
     cfg_dataset, cfg_lm, cfg_trainer = cfg.dataset, cfg.lm, cfg.trainer    
     
+    # HINT: ProGen2 didn't implement `get_output_embeddings()` and therefore `model.tie_weights()`
+    # inside/outside `from_pretrained()` is actually dummy!
     model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(Path(cfg_lm.pretrained_dir), torch_dtype=torch.float32) # type: ignore
-    model.overwrite_embeddings(cfg_lm.new_vocab_size)
+    model.tie_weights() # ensurement
+    model.resize_token_embeddings(cfg_lm.new_vocab_size)
     model.train()
     
     # TODO update files 
@@ -163,17 +181,19 @@ def main(cfg: DictConfig):
         pad_token_id=progen2_merged_tokenizer.pad_token_id,
         do_sample=True,
         top_k=2048,
+        temperature=0.7,
+        top_p=0.4,
         max_new_tokens=512,
     )
     trainer = TrainerWithCustomEval(
         generation_config=GENERATION_CONFIG,
-        data_collator=DPLMCollator(processor, mode='train'),
-        eval_collator=DPLMCollator(processor, mode='eval'),
+        data_collator=DPLMCollator(processor, mode='train', train_task=cfg_dataset.train_task),
+        eval_collator=DPLMCollator(processor, mode='eval', eval_task=cfg_dataset.eval_task),
         processor=processor,
-        compute_metrics=functools.partial(compute_folding_metrics, dplm_processor=processor),
+        compute_metrics=functools.partial(compute_generation_metrics, dplm_processor=processor),
         model=model,
         args=training_args,
-        train_dataset=train_dataset,    # type: ignore
+        train_dataset=eval_dataset,     # type: ignore
         eval_dataset=eval_dataset,      # type: ignore
     )
     trainer.train()
