@@ -3,7 +3,6 @@
 **/dplm
 **/checkpoints
 **/__pycache__
-**/data
 **/pytest
 
 /trash
@@ -15,3 +14,4 @@
 *.ipynb
 *.txt
 *.log
+*.cif
