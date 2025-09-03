@@ -1,6 +1,5 @@
 sequence_only: False
 # oligomer: monomeric
 data_dir: /AIRvePFS/ai4science/users/tianyu/lf/data/metadata.csv
-datafiles: /AIRvePFS/ai4science/users/tianyu/lf/data/rcsb_sequence/dplm.txt
 batch_size: 2
 num_workers: 1

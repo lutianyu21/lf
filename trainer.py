@@ -160,7 +160,7 @@ def main(cfg: DictConfig):
     # TODO update files 
     csv = pd.read_csv(cfg_dataset.data_dir)
     csv = csv[csv.oligomeric_detail == 'monomeric']
-    dataset = Dataset.from_dict({"mmcif_path": [str(Path(cfg_dataset.data_dir).parent/f'{p}.cif') for p in csv.pdb_name]})
+    dataset = Dataset.from_dict({"mmcif_path": [str(Path(cfg_dataset.data_dir).parent/'rcsb_mmcif'/f'{p}.cif') for p in csv.pdb_name]})
     split_dataset = dataset.train_test_split(test_size=0.001, seed=42)
     train_dataset = split_dataset["train"]
     eval_dataset = split_dataset["test"]
