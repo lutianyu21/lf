@@ -6,7 +6,7 @@ defaults:
 
 name: progen2-dplm2-seq
 trainer:
-  output_dir: /AIRvePFS/ai4science/users/tianyu/LLMFolding-structure/output/checkpoints/seq
+  output_dir: /AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/seq
 dataset:
   train_task: seq_lm
   eval_task: folding_lm

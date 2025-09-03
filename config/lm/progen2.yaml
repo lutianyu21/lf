@@ -1,2 +1,2 @@
-pretrained_dir: /AIRvePFS/ai4science/users/tianyu/LLMFolding-structure/utils/progen2_utils/checkpoints/progen2-base
+pretrained_dir: /AIRvePFS/ai4science/users/tianyu/lf/utils/progen2_utils/checkpoints/progen2-base
 new_vocab_size: 8300
