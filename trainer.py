@@ -24,7 +24,23 @@ from utils.openfold_utils.io import OpenfoldEntity
 from utils.progen2_utils import ProGenForCausalLM, progen2_merged_tokenizer
 
 
-class TrainerWithCustomEval(Trainer):
+
+
+class TrainerWithCustomLoss(Trainer):
+    
+    def compute_loss(self, model, inputs, return_outputs=False):
+        outputs = model(**inputs)
+        log_dict = {}
+        if (seq_loss := outputs.seq_loss) is not None:
+            log_dict["seq_loss"] = seq_loss.detach().cpu().item()
+        if (struct_loss := outputs.struct_loss) is not None:
+            log_dict["struct_loss"] = struct_loss.detach().cpu().item()
+        if log_dict:
+            self.log(log_dict)
+        return (outputs.loss, outputs) if return_outputs else outputs.loss
+
+
+class TrainerWithCustomEval(TrainerWithCustomLoss):
     
     def __init__(self, *args, generation_config, eval_collator, processor, **kwargs):
         super().__init__(*args, **kwargs)
@@ -96,22 +112,6 @@ class TrainerWithCustomEval(Trainer):
         generated_tokens = torch.where(generated_tokens == constant['pad_token'], -100, generated_tokens)
         
         return (None, generated_tokens, labels)
-
-    def compute_loss(
-        self,
-        model,
-        inputs,
-        return_outputs=False
-    ):
-        outputs = model(**inputs)
-        log_dict = {}
-        if (seq_loss := outputs.seq_loss) is not None:
-            log_dict["seq_loss"] = seq_loss.detach().cpu().item()
-        if (struct_loss := outputs.struct_loss) is not None:
-            log_dict["struct_loss"] = struct_loss.detach().cpu().item()
-        if log_dict:
-            self.log(log_dict)
-        return (outputs.loss, outputs) if return_outputs else outputs.loss
 
 
 
@@ -185,15 +185,24 @@ def main(cfg: DictConfig):
         top_p=0.4,
         max_new_tokens=512,
     )
-    trainer = TrainerWithCustomEval(
-        generation_config=GENERATION_CONFIG,
+    # trainer = TrainerWithCustomEval(
+    #     generation_config=GENERATION_CONFIG,
+    #     data_collator=DPLMCollator(processor, mode='train', train_task=cfg_dataset.train_task),
+    #     eval_collator=DPLMCollator(processor, mode='eval', eval_task=cfg_dataset.eval_task),
+    #     processor=processor,
+    #     compute_metrics=functools.partial(compute_generation_metrics, dplm_processor=processor),
+    #     model=model,
+    #     args=training_args,
+    #     train_dataset=train_dataset,    # type: ignore
+    #     eval_dataset=eval_dataset,      # type: ignore
+    # )
+    
+    # option2: train loss & eval loss
+    trainer = TrainerWithCustomLoss(
         data_collator=DPLMCollator(processor, mode='train', train_task=cfg_dataset.train_task),
-        eval_collator=DPLMCollator(processor, mode='eval', eval_task=cfg_dataset.eval_task),
-        processor=processor,
-        compute_metrics=functools.partial(compute_generation_metrics, dplm_processor=processor),
         model=model,
         args=training_args,
-        train_dataset=eval_dataset,     # type: ignore
+        train_dataset=train_dataset,    # type: ignore
         eval_dataset=eval_dataset,      # type: ignore
     )
     trainer.train()

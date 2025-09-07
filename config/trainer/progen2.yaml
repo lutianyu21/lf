@@ -26,4 +26,4 @@ dataloader_pin_memory: True
 per_device_eval_batch_size: 4
 # evaluation_strategy: epoch
 evaluation_strategy: steps
-eval_steps: 200
+eval_steps: 10

@@ -40,6 +40,11 @@ export MASTER_PORT=29500
 # Optimized torchrun training script:
 TRAIN_SCRIPT=$(cat <<'EOF'
 
+echo "=== Ensuring numactl is installed ==="
+(apt-get update && apt-get install -y numactl) \
+  || (yum install -y numactl) \
+  || echo "numactl install skipped (no root)"
+
 echo "=== Node Information ==="
 hostname
 
