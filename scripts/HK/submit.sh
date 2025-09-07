@@ -76,15 +76,15 @@ $PIP show torch >/dev/null 2>&1 || $PIP install \
 
 $PIP show ByProt >/dev/null 2>&1 || $PIP install -e \
     --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
-    /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm
+    /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm
 
 $PIP show openfold >/dev/null 2>&1 || $PIP install -e \
     --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
-    /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold
+    /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm/vendor/openfold
 
 
 echo "=== Starting torchrun ==="
-cd /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm
+cd /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm
 conda run -n dplm torchrun \
     --nnodes=$SLURM_NNODES \
     --nproc_per_node=$GPU_COUNT \
