@@ -40,11 +40,6 @@ export MASTER_PORT=29500
 # Optimized torchrun training script:
 TRAIN_SCRIPT=$(cat <<'EOF'
 
-echo "=== Ensuring numactl is installed ==="
-(apt-get update && apt-get install -y numactl) \
-  || (yum install -y numactl) \
-  || echo "numactl install skipped (no root)"
-
 echo "=== Node Information ==="
 hostname
 
@@ -115,7 +110,7 @@ fi
 
 # Export variable in the container:
 srun enroot start -r --mount /cm/shared --mount /home -w $CONTAINER_NAME \
-    -- numactl --cpunodebind=0 --membind=0 /bin/bash -c "
+    -- numactl /bin/bash -c "
     export SLURM_JOB_ID=$SLURM_JOB_ID; \
     export SLURM_NNODES=$SLURM_NNODES; \
     export MASTER_ADDR=$MASTER_ADDR; \
