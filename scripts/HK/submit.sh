@@ -74,13 +74,13 @@ $PIP show torch >/dev/null 2>&1 || $PIP install \
     --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
     torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu121
 
-$PIP show ByProt >/dev/null 2>&1 || $PIP install -e \
+$PIP show ByProt >/dev/null 2>&1 || $PIP install \
     --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
-    /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm
+    -e /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm
 
-$PIP show openfold >/dev/null 2>&1 || $PIP install -e \
+$PIP show openfold >/dev/null 2>&1 || $PIP install \
     --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
-    /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm/vendor/openfold
+    -e /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm/vendor/openfold
 
 
 echo "=== Starting torchrun ==="
