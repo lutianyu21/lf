@@ -669,8 +669,8 @@ class ProGenForCausalLM(ProGenPreTrainedModel):
             # labels: <pad><pad><bos><boseq>xxx<eoseq><bostruct>xxx<eostruct><eos>
             # mask1:    0    0    0     1   111   0        0    000     0       0
             # mask2:    0    0    0     0   000   0        1    111     0       0
-            sequence_section_masks: torch.Tensor = kwargs.get('seq_section_masks', torch.zeros_like(labels))     # [B, L]
-            structure_section_masks: torch.Tensor = kwargs.get('struct_section_masks', torch.zeros_like(labels)) # [B, L]
+            sequence_section_masks: torch.Tensor = kwargs.get('pseq_modality_mask', torch.zeros_like(labels))     # [B, L]
+            structure_section_masks: torch.Tensor = kwargs.get('pstruct_modality_mask', torch.zeros_like(labels)) # [B, L]
             log_probs = torch.nn.functional.log_softmax(shift_logits, dim=-1)
             ce = F.nll_loss(
                 input=log_probs.view(-1, log_probs.size(-1)),
