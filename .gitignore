@@ -1,7 +1,4 @@
-**/SaProt
-**/progen
-**/dplm
-**/checkpoints
+**/checkpoints/
 **/__pycache__
 **/pytest
 
@@ -9,7 +6,6 @@
 /wandb
 /output
 **/dplm
-**/progen
 
 *.ipynb
 *.txt
