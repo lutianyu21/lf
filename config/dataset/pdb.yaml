@@ -1,5 +1,3 @@
-sequence_only: False
-# oligomer: monomeric
-data_dir: /AIRvePFS/ai4science/users/tianyu/lf/data/metadata.csv
-batch_size: 2
-num_workers: 1
+data_dir: /AIRvePFS/ai4science/users/tianyu/lf/data/monomeric.jsonl
+min_len: 128
+max_len: 512

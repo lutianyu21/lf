@@ -15,6 +15,7 @@
 *.txt
 *.log
 *.cif
+*.jsonl
 
 # slink
 data/rcsb_mmcif

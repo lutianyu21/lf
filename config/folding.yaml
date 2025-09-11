@@ -4,9 +4,7 @@ defaults:
   - lm: progen2
   - trainer: progen2
 
-name: progen2-dplm2-folding
-trainer:
-  output_dir: /AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/folding
+name: dummy
 dataset:
   train_task: folding_lm
   eval_task: folding_lm

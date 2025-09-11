@@ -1,4 +1,5 @@
-from typing import Dict, List
+from typing import Any, Dict, List
+from huggingface_hub import Padding
 import torch
 import torch.utils
 import torch.utils.data
@@ -10,7 +11,23 @@ from utils.progen2_utils import progen2_merged_tokenizer
 from utils.openfold_utils import OpenfoldEntity
 
 
-__all__ = ['DPLMCollator']
+__all__ = ["DPLMCollator", "TextCollator"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class DPLMCollator:
     """train format: <bos><boseq>xxx<eoseq><bostruct>xxx<eostruct><eos>
@@ -45,4 +62,65 @@ class DPLMCollator:
         elif self.mode == 'eval':
             batch_eval['labels'] = batch_train['input_ids'].clone() # [B, L] label's longer than input_ids
             return batch_eval
-        
+
+
+
+import json
+import math
+import os
+import pickle as pkl
+from typing import Iterable, Sequence, TypeVar, Union
+
+import numpy as np
+import torch
+import torch.distributed as dist
+from datasets import load_dataset
+
+from transformers import EsmTokenizer
+
+
+
+
+
+
+
+
+class DPLMCollater(object):
+    """Wrapped for OA Collater to operate on ESM w/ ESM alphabet and batch
+    converter/tokens."""
+
+    def __init__(self, tokenizer_path=None):
+        # by default we use the EsmTokenizer and the esm vocab.
+        # if you want to use the different vocab,
+        # please set the vocab path to the tokenizer_path
+        if tokenizer_path is None:
+            self.alphabet = EsmTokenizer.from_pretrained(
+                "facebook/esm2_t30_150M_UR50D"
+            )
+        else:
+            self.alphabet = EsmTokenizer.from_pretrained(tokenizer_path)
+
+    def __call__(self, sequences):
+        if len(list(zip(*sequences))) == 0:
+            print("list idx error!")
+            print(sequences)
+        input_data = sequences
+        batch = self.alphabet.batch_encode_plus(
+            input_data,
+            add_special_tokens=True,
+            padding="longest",
+            return_tensors="pt",
+        )
+
+        batch = {
+            "input_ids": batch["input_ids"],
+            "input_mask": batch["attention_mask"].bool(),
+            "targets": batch["input_ids"].clone(),
+        }
+        return batch
+
+
+
+
+
+

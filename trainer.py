@@ -1,4 +1,3 @@
-import functools
 import warnings
 from multiprocessing import process
 from typing import Any, Dict, Optional, List, Tuple
@@ -147,8 +146,12 @@ def compute_generation_metrics(eval_preds, dplm_processor: DPLMProcessor):
 
 @hydra.main(version_base=None, config_path="./config", config_name="config.yaml")
 def main(cfg: DictConfig):
+    
+    cfg_dataset, cfg_lm, cfg_trainer = cfg.dataset, cfg.lm, cfg.trainer
+    # facilitate wandb
+    cfg.name = f'C{cfg_dataset.eval_split}_B{cfg_trainer.per_device_train_batch_size * int(os.environ["WORLD_SIZE"])}_lr{cfg_trainer.learning_rate}'
+    cfg_trainer.output_dir = f'/AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/{cfg.name}'
     wandb.init(project="LLMFolding", name=cfg.name, config=OmegaConf.to_container(cfg, resolve=True)) # type: ignore
-    cfg_dataset, cfg_lm, cfg_trainer = cfg.dataset, cfg.lm, cfg.trainer    
     
     # HINT: ProGen2 didn't implement `get_output_embeddings()` and therefore `model.tie_weights()`
     # inside/outside `from_pretrained()` is actually dummy!
@@ -160,8 +163,9 @@ def main(cfg: DictConfig):
     # TODO update files 
     csv = pd.read_csv(cfg_dataset.data_dir)
     csv = csv[csv.oligomeric_detail == 'monomeric']
+    csv = csv[(csv.seq_len >= cfg_dataset.min_len) & (csv.seq_len <= cfg_dataset.max_len)]
     dataset = Dataset.from_dict({"mmcif_path": [str(Path(cfg_dataset.data_dir).parent/'rcsb_mmcif'/f'{p}.cif') for p in csv.pdb_name]})
-    split_dataset = dataset.train_test_split(test_size=0.001, seed=42)
+    split_dataset = dataset.train_test_split(test_size=cfg_dataset.eval_split, seed=42)
     train_dataset = split_dataset["train"]
     eval_dataset = split_dataset["test"]
     print(f"train_dataset size: {len(train_dataset)}, eval_dataset size: {len(eval_dataset)}")
@@ -203,7 +207,6 @@ def main(cfg: DictConfig):
         model=model,
         args=training_args,
         train_dataset=train_dataset,    # type: ignore
-        eval_dataset=eval_dataset,      # type: ignore
     )
     trainer.train()
 

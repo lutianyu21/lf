@@ -55,10 +55,10 @@ echo "=== GPU visibility ==="
 nvidia-smi -L
 GPU_COUNT=$(nvidia-smi -L | wc -l)
 
-export HTTPS_PROXY="http://cityu:upside_tumbling_turbine@klb-fwproxy-01.aisc.local:3128"
-export HTTP_PROXY="http://cityu:upside_tumbling_turbine@klb-fwproxy-01.aisc.local:3128"
-export https_proxy="http://cityu:upside_tumbling_turbine@klb-fwproxy-01.aisc.local:3128"
-export http_proxy="http://cityu:upside_tumbling_turbine@klb-fwproxy-01.aisc.local:3128"
+export HTTPS_PROXY="http://cityu:upside_tumbling_turbine@cp2-fwproxy-vip.aisc.local:3128"
+export HTTP_PROXY="http://cityu:upside_tumbling_turbine@cp2-fwproxy-vip.aisc.local:3128"
+export https_proxy="http://cityu:upside_tumbling_turbine@cp2-fwproxy-vip.aisc.local:3128"
+export http_proxy="http://cityu:upside_tumbling_turbine@cp2-fwproxy-vip.aisc.local:3128"
 export WANDB_API_KEY=bc2e2b14aacbadfd88a86ceab37243b8944b0eaf
 export WANDB_IGNORE_GIT=True
 export WANDB_INSECURE_DISABLE_SSL=True
@@ -110,7 +110,7 @@ fi
 
 # Export variable in the container:
 srun enroot start -r --mount /cm/shared --mount /home -w $CONTAINER_NAME \
-    -- numactl /bin/bash -c "
+    --numactl /bin/bash -c "
     export SLURM_JOB_ID=$SLURM_JOB_ID; \
     export SLURM_NNODES=$SLURM_NNODES; \
     export MASTER_ADDR=$MASTER_ADDR; \
