@@ -66,7 +66,8 @@ def main(cfg: DictConfig):
     # facilitate wandb
     cfg.name = f'B{int(os.environ["WORLD_SIZE"])}x{cfg_trainer.per_device_train_batch_size}_lr{cfg_trainer.learning_rate}'
     cfg_trainer.output_dir = f'/AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/{cfg.name}'
-    wandb.init(project="LLMFolding", name=cfg.name, config=OmegaConf.to_container(cfg, resolve=True)) # type: ignore
+    if (rank := int(os.environ.get("RANK", 0))) == 0:
+        wandb.init(project="LLMFolding", name=cfg.name, config=OmegaConf.to_container(cfg, resolve=True)) # type: ignore
     
     # HINT: ProGen2 didn't implement `get_output_embeddings()` and therefore 
     # `model.tie_weights()` inside/outside `from_pretrained()` is actually dummy!

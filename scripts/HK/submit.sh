@@ -110,7 +110,7 @@ fi
 
 # Export variable in the container:
 srun enroot start -r --mount /cm/shared --mount /home -w $CONTAINER_NAME \
-    --numactl /bin/bash -c "
+    -- numactl /bin/bash -c "
     export SLURM_JOB_ID=$SLURM_JOB_ID; \
     export SLURM_NNODES=$SLURM_NNODES; \
     export MASTER_ADDR=$MASTER_ADDR; \
