@@ -9,7 +9,7 @@ output_dir: dummy
 
 # training
 num_train_epochs: 1000
-learning_rate: 2e-4
+learning_rate: 2e-5
 weight_decay: 0.01
 # max_grad_norm: 1.0
 warmup_steps: 1000

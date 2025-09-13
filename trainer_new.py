@@ -53,7 +53,8 @@ class TrainerWithCustomLoss(Trainer):
             collater=TextCollator(progen2_merged_tokenizer),
             bucket_size=1000,
             max_batch_size=100,
-            max_tokens=4500,
+            max_tokens=6000,
+            max_square_tokens=1200000,
             max_len=2048,
         )
 
@@ -64,7 +65,7 @@ def main(cfg: DictConfig):
     cfg_dataset, cfg_lm, cfg_trainer = cfg.dataset, cfg.lm, cfg.trainer
     
     # facilitate wandb
-    cfg.name = f'B{int(os.environ["WORLD_SIZE"])}x{cfg_trainer.per_device_train_batch_size}_lr{cfg_trainer.learning_rate}'
+    cfg.name = f'B{int(os.environ["WORLD_SIZE"])}xdynamic_lr{cfg_trainer.learning_rate}'
     cfg_trainer.output_dir = f'/AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/{cfg.name}'
     if (rank := int(os.environ.get("RANK", 0))) == 0:
         wandb.init(project="LLMFolding", name=cfg.name, config=OmegaConf.to_container(cfg, resolve=True)) # type: ignore
