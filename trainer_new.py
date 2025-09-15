@@ -53,8 +53,8 @@ class TrainerWithCustomLoss(Trainer):
             collater=TextCollator(progen2_merged_tokenizer),
             bucket_size=1000,
             max_batch_size=100,
-            max_tokens=6000,
-            max_square_tokens=1200000,
+            max_tokens=5000,
+            max_square_tokens=1000000,
             max_len=2048,
         )
 
