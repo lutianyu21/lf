@@ -8,7 +8,10 @@ import torch.distributed as dist
 import math
 import numpy as np
 
-__all__ = ['setup_dataloader', 'TextCollator']
+__all__ = [
+    'TextCollator',
+    'SortishApproxBatchDataloader'
+]
 
 
 class TextCollator:
@@ -36,7 +39,6 @@ class TextCollator:
 
 
 class SortishSampler(torch.utils.data.Sampler):
-    
     def __init__(
         self,
         sequence_lengths: Iterable,
@@ -89,9 +91,9 @@ class ApproxBatchSampler(torch.utils.data.BatchSampler):
         max_square_tokens,
         max_batch,
         sample_lengths,
+        max_len,
         drop_last=False,
         batch_size=None,
-        max_len=512,
     ):
         super().__init__(sampler, max_batch, drop_last)
         self.longest_token = 0
@@ -101,6 +103,7 @@ class ApproxBatchSampler(torch.utils.data.BatchSampler):
         self.sample_lengths = sample_lengths
         self.max_square_tokens = max_square_tokens
         self.max_len = max_len
+        self.epoch = 0
         self.batches = self._build_batches()
 
     def _build_batches(self):
@@ -164,38 +167,50 @@ class ApproxBatchSampler(torch.utils.data.BatchSampler):
     def __iter__(self):
         for batch in self.batches:
             yield batch
+    
+    def set_epoch(self, epoch: int):
+        self.epoch = epoch
+        self.sampler.set_epoch(epoch)
+        print(f"==============Building batches for epoch %{epoch}===============")
+        self.batches = self._build_batches()
+        np.random.default_rng(epoch).shuffle(self.batches)
 
-def setup_dataloader(
-    ds: Any,
-    collater: Callable,
-    max_tokens=6000,
-    max_square_tokens=1000000,
-    bucket_size=1000,
-    max_batch_size=800,
-    num_workers=8,
-    rank=0,
-    world_size=1,
-    max_len=512,
-) -> torch.utils.data.DataLoader:
-    lens = ds['length']
-    train_sortish_sampler = SortishSampler(
-        lens,
-        bucket_size,
-        num_replicas=world_size,
-        rank=rank
-    )
-    train_sampler = ApproxBatchSampler(
-        train_sortish_sampler,
-        max_tokens,
-        max_square_tokens,
-        max_batch_size,
-        lens,
-        max_len=max_len,
-    )
-    dl = torch.utils.data.DataLoader(
-        dataset=ds,
-        batch_sampler=train_sampler,
-        num_workers=num_workers,
-        collate_fn=collater,
-    )
-    return dl
+class SortishApproxBatchDataloader(torch.utils.data.DataLoader):
+    def __init__(
+        self,
+        ds: Any,
+        collater: Callable,
+        max_tokens: int = 6000,
+        max_square_tokens: int = 1000000,
+        bucket_size: int = 1000,
+        max_batch_size: int = 800,
+        num_workers: int = 8,
+        rank: int = 0,
+        world_size: int = 1,
+        max_len: int = 512,
+    ) -> None:
+        lens = ds['length']
+        train_sortish_sampler = SortishSampler(
+            lens,
+            bucket_size,
+            num_replicas=world_size,
+            rank=rank
+        )
+        train_sampler = ApproxBatchSampler(
+            train_sortish_sampler,
+            max_tokens,
+            max_square_tokens,
+            max_batch_size,
+            lens,
+            max_len=max_len,
+        )
+        self.apporx_batch_sampler = train_sampler
+        super().__init__(
+            dataset=ds,
+            batch_sampler=train_sampler,
+            num_workers=num_workers,
+            collate_fn=collater,
+        )
+        
+    def set_epoch(self, epoch):
+        self.apporx_batch_sampler.set_epoch(epoch)

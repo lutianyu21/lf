@@ -1,4 +1,3 @@
-import warnings
 from typing import Any, Dict, Optional, List, Text, Tuple
 import hydra
 import torch
@@ -16,18 +15,10 @@ from omegaconf import OmegaConf, DictConfig
 import datasets
 from datasets import Dataset, load_dataset
 from transformers import Trainer, TrainingArguments, TrainerCallback, is_datasets_available
-from transformers import DataCollatorForLanguageModeling
-from transformers import EvalPrediction
 from transformers.generation.configuration_utils import GenerationConfig
-from transformers import TrainerCallback, TrainerState, TrainerControl
 
-from data.utils import setup_dataloader, TextCollator
-
-from utils.transformers_utils import DynamicMultimodalLogitsProcessor
-from utils.dplm_utils import DPLMProcessor
-from utils.openfold_utils.io import OpenfoldEntity
-from utils.progen2_utils import ProGenForCausalLM, progen2_merged_tokenizer
-
+from data.utils import SortishApproxBatchDataloader, TextCollator
+from utils.progen2_utils import ProGenForCausalLM, ProGenConfig, progen2_merged_tokenizer
 
 
 
@@ -39,7 +30,8 @@ class TrainerWithCustomLoss(Trainer):
         if (pstruct_loss := outputs.struct_loss) is not None:   aux_log["pstruct_loss"] = pstruct_loss.detach().cpu().item()
         if (pseq_loss := outputs.seq_loss) is not None:         aux_log["pseq_loss"] = pseq_loss.detach().cpu().item()
         if (length := inputs['length']) is not None:            
-            aux_log['length'] = length.float().mean().cpu().item()
+            aux_log['raw_length'] = length.float().mean().cpu().item()
+            aux_log['batch_length'] = inputs['labels'].shape[-1]
             aux_log['bsz'] = length.shape[0]
         
         if self.is_in_train:
@@ -48,13 +40,13 @@ class TrainerWithCustomLoss(Trainer):
         return (outputs.loss, outputs) if return_outputs else outputs.loss
     
     def get_train_dataloader(self):
-        return setup_dataloader(
+        return SortishApproxBatchDataloader(
             ds=self.train_dataset,
             collater=TextCollator(progen2_merged_tokenizer),
             bucket_size=1000,
             max_batch_size=100,
-            max_tokens=5000,
-            max_square_tokens=1000000,
+            max_tokens=10000,
+            max_square_tokens=3000000,
             max_len=2048,
         )
 
@@ -65,17 +57,19 @@ def main(cfg: DictConfig):
     cfg_dataset, cfg_lm, cfg_trainer = cfg.dataset, cfg.lm, cfg.trainer
     
     # facilitate wandb
-    cfg.name = f'B{int(os.environ["WORLD_SIZE"])}xdynamic_lr{cfg_trainer.learning_rate}'
+    cfg.name = f'Mprogen_B{int(os.environ["WORLD_SIZE"])}xdynamic_lr{cfg_trainer.learning_rate}'
     cfg_trainer.output_dir = f'/AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/{cfg.name}'
     if (rank := int(os.environ.get("RANK", 0))) == 0:
         wandb.init(project="LLMFolding", name=cfg.name, config=OmegaConf.to_container(cfg, resolve=True)) # type: ignore
     
     # HINT: ProGen2 didn't implement `get_output_embeddings()` and therefore 
     # `model.tie_weights()` inside/outside `from_pretrained()` is actually dummy!
-    model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(Path(cfg_lm.pretrained_dir), torch_dtype=torch.float32) # type: ignore
-    model.tie_weights() # ensurement
-    model.resize_token_embeddings(cfg_lm.new_vocab_size)
-    model.train()
+    hf_config: ProGenConfig = ProGenConfig.from_pretrained(Path(cfg_lm.hf_checkpoint_dir)) # type: ignore
+    # hf_model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(Path(cfg_lm.pretrained_dir), torch_dtype=torch.float32) # type: ignore
+    hf_model: ProGenForCausalLM = ProGenForCausalLM(hf_config)
+    hf_model.tie_weights() # ensurement
+    hf_model.resize_token_embeddings(cfg_lm.new_vocab_size)
+    hf_model.train()
     
     # monomeric dataset
     monomeric_dataset = load_dataset("json", data_files=cfg_dataset.data_dir, split="train")
@@ -93,7 +87,7 @@ def main(cfg: DictConfig):
     collator = TextCollator(tokenizer)
     trainer = TrainerWithCustomLoss(
         args=training_args,
-        model=model,
+        model=hf_model,
         data_collator=collator,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
