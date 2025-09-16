@@ -5,4 +5,4 @@ export http_proxy="http://cityu:upside_tumbling_turbine@cp2-fwproxy-vip.aisc.loc
 export WANDB_API_KEY=bc2e2b14aacbadfd88a86ceab37243b8944b0eaf
 export WANDB_IGNORE_GIT=True
 export WANDB_INSECURE_DISABLE_SSL=True
-torchrun --nproc_per_node=8 trainer_new.py --config-name='folding'
+torchrun --nproc_per_node=8 trainer_progen.py --config-name='folding'
