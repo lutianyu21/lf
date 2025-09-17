@@ -68,7 +68,7 @@ pip config list
 pip config set global.index-url https://pypi.org/simple
 pip config list
 
-echo "=== Pip installing  ==="
+echo "=== Installing dplm env ==="
 PIP=/root/miniconda3/envs/dplm/bin/pip
 $PIP show torch >/dev/null 2>&1 || $PIP install \
     --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
@@ -82,8 +82,7 @@ $PIP show openfold >/dev/null 2>&1 || $PIP install \
     --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
     -e /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm/vendor/openfold
 
-
-echo "=== Starting torchrun ==="
+echo "=== Runnig task ==="
 cd /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm
 conda run -n dplm torchrun \
     --nnodes=$SLURM_NNODES \
@@ -91,7 +90,7 @@ conda run -n dplm torchrun \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     --node_rank=$SLURM_NODEID \
-    trainer.py --config-name='folding'
+    trainer_progen.py --config-name='folding'
 
 echo "=== torchrun command executed ==="
 EOF
@@ -109,8 +108,8 @@ fi
 "
 
 # Export variable in the container:
-srun enroot start -r --mount /cm/shared --mount /home -w $CONTAINER_NAME \
-    -- numactl /bin/bash -c "
+numactl --cpunodebind=0 --membind=0 srun enroot start -r --mount /cm/shared --mount /home -w $CONTAINER_NAME \
+    -- /bin/bash -c "
     export SLURM_JOB_ID=$SLURM_JOB_ID; \
     export SLURM_NNODES=$SLURM_NNODES; \
     export MASTER_ADDR=$MASTER_ADDR; \

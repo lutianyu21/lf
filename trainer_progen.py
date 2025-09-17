@@ -72,11 +72,10 @@ def main(cfg: DictConfig):
     hf_model.train()
     
     # monomeric dataset
-    monomeric_dataset = load_dataset("json", data_files=cfg_dataset.data_dir, split="train")
-    monomeric_filtered_dataset: Any = monomeric_dataset.filter(lambda item: cfg_dataset.min_len <= item['length'] <= cfg_dataset.max_len)    
-    print(f"monomeric dataset: {len(monomeric_filtered_dataset)} items") # type: ignore
-    print(f"monomeric filtered dataset: {len(monomeric_filtered_dataset)} items") # type: ignore
-    dataset = monomeric_filtered_dataset
+    full_dataset = load_dataset("json", data_files=cfg_dataset.data_dir, split="train")
+    filtered_dataset: Any = full_dataset.filter(lambda item: cfg_dataset.min_len <= item['length'] <= cfg_dataset.max_len)
+    
+    dataset = filtered_dataset
     split = dataset.train_test_split(test_size=0.1, seed=2025)
     train_dataset, eval_dataset = split['train'], split['test']
     print(f"train: {len(train_dataset)} items, eval: {len(eval_dataset)} items")

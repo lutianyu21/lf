@@ -1,3 +1,3 @@
 data_dir: /AIRvePFS/ai4science/users/tianyu/lf/data/dplm_pdb.jsonl
-min_len: 128
-max_len: 512
+min_len: 200
+max_len: 1200
