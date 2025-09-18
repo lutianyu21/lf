@@ -30,19 +30,19 @@ GENERATION_CONFIG = GenerationConfig(
     top_k=2048,
     temperature=0.7,
     top_p=0.4,
-    max_new_tokens=1024,
+    max_new_tokens=2048,
 )
 
 for i in range(20):
-    inputs = hf_tokenizer([train_dataset[i]['text']], return_tensors='pt', padding=True)
+    inputs = hf_tokenizer([train_dataset[i]['text']], return_tensors='pt', padding=True).to('cuda:0')
     labels = inputs['input_ids'].clone() # type: ignore
     labels[labels == hf_tokenizer.pad_token_id] = -100
     loss = hf_model(**inputs, labels=labels).loss
     print(f'===== NLL loss =====: {loss.detach().cpu().item()}')
     
-    inputs = hf_tokenizer(['<|bos|><|boseq|>' + train_dataset[i]['protein_text'] + '<|eoseq|><|bostruct|>'], return_tensors='pt', padding=True)
+    inputs = hf_tokenizer(['<|bos|><|boseq|>' + train_dataset[i]['protein_text'] + '<|eoseq|><|bostruct|>'], return_tensors='pt', padding=True).to('cuda:0')
     print("===== Gt Text =====", train_dataset[i]['text'])
-    logits_processor = DynamicMultimodalLogitsProcessor(**processor.constant_helper(), batch_length=[len(train_dataset[i]['protein_structure'])]) # type: ignore
+    logits_processor = DynamicMultimodalLogitsProcessor(**processor.constant_helper(), batch_length=[len(train_dataset[i]['protein_text'])]) # type: ignore
     generated_tokens = hf_model.generate(
         input_ids=inputs["input_ids"],
         attention_mask=inputs["attention_mask"],
