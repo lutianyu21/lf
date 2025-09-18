@@ -83,7 +83,7 @@ $PIP show openfold >/dev/null 2>&1 || $PIP install \
     -e /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm/vendor/openfold
 
 echo "=== Runnig task ==="
-cd /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm
+cd /AIRvePFS/ai4science/users/tianyu/lf
 conda run -n dplm torchrun \
     --nnodes=$SLURM_NNODES \
     --nproc_per_node=$GPU_COUNT \
