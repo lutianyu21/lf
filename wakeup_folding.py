@@ -14,7 +14,7 @@ dataset: Any = filtered_dataset
 split = dataset.train_test_split(test_size=0.1, seed=2025)
 train_dataset, eval_dataset = split['train'], split['test']
 
-ckpt_dir = Path('null')
+ckpt_dir = Path('output/checkpoints/Mprogen_B8xdynamic_lr2e-05/checkpoint-64438')
 hf_model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(ckpt_dir) # type: ignore
 hf_tokenizer = progen2_merged_tokenizer
 
@@ -38,7 +38,8 @@ for i in range(20):
     loss = hf_model(**inputs, labels=labels).loss
     print(f'===== NLL loss =====: {loss.detach().cpu().item()}')
     
-    inputs = hf_tokenizer(['<|eos|>' + train_dataset[i]['protein_text']], return_tensors='pt', padding=True)
+    inputs = hf_tokenizer(['<|bos|><|boseq|>' + train_dataset[i]['protein_text'] + '<|eoseq|><|bostruct|>'], return_tensors='pt', padding=True)
+    print("===== Gt Text =====", train_dataset[i]['text'])
     logits_processor = DynamicMultimodalLogitsProcessor(**processor.constant_helper(), batch_length=[len(train_dataset[i]['protein_structure'])]) # type: ignore
     generated_tokens = hf_model.generate(
         input_ids=inputs["input_ids"],
@@ -46,7 +47,6 @@ for i in range(20):
         logits_processor=[logits_processor],
         generation_config=GENERATION_CONFIG,
     )
-    print("===== Gt Text =====", train_dataset[i]['text'])
     print("===== Gen Text =====", hf_tokenizer.decode(generated_tokens[0]))
     _, _, gt_structure_list = processor.decode(hf_tokenizer.encode(train_dataset[i]['text']))
     _, _, gen_structure_list = processor.decode(generated_tokens[0])
