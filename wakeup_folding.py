@@ -39,9 +39,10 @@ for i in range(20):
     labels[labels == hf_tokenizer.pad_token_id] = -100
     loss = hf_model(**inputs, labels=labels).loss
     print(f'===== NLL loss =====: {loss.detach().cpu().item()}')
+    print("===== Gt Text =====", train_dataset[i]['text'])
+    print("===== Argmax Text =====", hf_tokenizer.decode(torch.argmax(hf_model(**inputs).logits, dim=-1)[0]))
     
     inputs = hf_tokenizer(['<|bos|><|boseq|>' + train_dataset[i]['protein_text'] + '<|eoseq|><|bostruct|>'], return_tensors='pt', padding=True).to('cuda:0')
-    print("===== Gt Text =====", train_dataset[i]['text'])
     logits_processor = DynamicMultimodalLogitsProcessor(**processor.constant_helper(), batch_length=[len(train_dataset[i]['protein_text'])]) # type: ignore
     generated_tokens = hf_model.generate(
         input_ids=inputs["input_ids"],
