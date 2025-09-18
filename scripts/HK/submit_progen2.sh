@@ -111,6 +111,7 @@ fi
 numactl --cpunodebind=0 --membind=0 srun enroot start -r \
     --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/AIRvePFS/ai4science/users/tianyu/lf/data/rcsb_mmcif \
     --mount /home/projects/protein/lutianyu/lf:/AIRvePFS/ai4science/users/tianyu/lf \
+    -w $CONTAINER_NAME \
     -- /bin/bash -c "
     export SLURM_JOB_ID=$SLURM_JOB_ID; \
     export SLURM_NNODES=$SLURM_NNODES; \
