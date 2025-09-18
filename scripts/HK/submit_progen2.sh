@@ -6,7 +6,7 @@
 #SBATCH --job-name=lf-ar                # job name
 #SBATCH --output=output.log             # stdout
 #SBATCH --error=error.log               # stderr
-#SBATCH --nodes=1                       # nodes
+#SBATCH --nodes=2                       # nodes
 #SBATCH --gres=gpu:8                    # GPUs/node
 #SBATCH --ntasks-per-node=1             # tasks/node
 #SBATCH --cpus-per-task=224             # CPUs/task

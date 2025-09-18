@@ -57,7 +57,7 @@ def main(cfg: DictConfig):
     cfg_dataset, cfg_lm, cfg_trainer = cfg.dataset, cfg.lm, cfg.trainer
     
     # facilitate wandb
-    node, bsz, grad_accu = int(os.environ["WORLD_SIZE"]), 'dynamic', cfg_trainer.get('gradient_accumulation_steps', 1)
+    node, bsz, grad_accu = int(os.environ["WORLD_SIZE"]), 'dyn', cfg_trainer.get('gradient_accumulation_steps', 1)
     cfg.name = f'Mprogen2_B{node}x{bsz}x{grad_accu}_lr{cfg_trainer.learning_rate}'
     cfg_trainer.output_dir = f'/AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/{cfg.name}'
     if (rank := int(os.environ.get("RANK", 0))) == 0:
