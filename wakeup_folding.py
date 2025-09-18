@@ -14,7 +14,7 @@ dataset: Any = filtered_dataset
 split = dataset.train_test_split(test_size=0.1, seed=2025)
 train_dataset, eval_dataset = split['train'], split['test']
 
-ckpt_dir = Path('/AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/Mprogen_B8xdynamic_lr2e-05/checkpoint-64438')
+ckpt_dir = Path('/AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/Mprogen_B8xdynamic_lr2e-05/checkpoint-65438')
 hf_model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(ckpt_dir) # type: ignore
 hf_model.to('cuda:0')
 hf_model.eval()
