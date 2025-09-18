@@ -16,6 +16,8 @@ train_dataset, eval_dataset = split['train'], split['test']
 
 ckpt_dir = Path('output/checkpoints/Mprogen_B8xdynamic_lr2e-05/checkpoint-64438')
 hf_model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(ckpt_dir) # type: ignore
+hf_model.to('cuda:0')
+hf_model.eval()
 hf_tokenizer = progen2_merged_tokenizer
 
 processor = DPLMProcessor(structure_tokenizer=dplm_tokenizer, tokenizer=progen2_merged_tokenizer)
