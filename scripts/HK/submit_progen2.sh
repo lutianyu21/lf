@@ -90,7 +90,7 @@ conda run -n dplm torchrun \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     --node_rank=$SLURM_NODEID \
-    trainer_progen.py --config-name='folding'
+    trainer_progen2.py --config-name='folding'
 
 echo "=== torchrun command executed ==="
 EOF

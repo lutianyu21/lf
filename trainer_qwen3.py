@@ -15,20 +15,21 @@ from omegaconf import OmegaConf, DictConfig
 import datasets
 from datasets import Dataset, load_dataset
 from transformers import Trainer, TrainingArguments, TrainerCallback, is_datasets_available
+from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.generation.configuration_utils import GenerationConfig
 
 from data.utils import SortishApproxBatchDataloader, TextCollator
-from utils.progen2_utils import ProGenForCausalLM, ProGenConfig, progen2_merged_tokenizer
+from utils.progen2_utils import progen2_merged_tokenizer
 
 
 
 class TrainerWithCustomLoss(Trainer):
     
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         aux_log = {}        
         outputs = model(**inputs)
-        if (pstruct_loss := outputs.struct_loss) is not None:   aux_log["pstruct_loss"] = pstruct_loss.detach().cpu().item()
-        if (pseq_loss := outputs.seq_loss) is not None:         aux_log["pseq_loss"] = pseq_loss.detach().cpu().item()
+        # if (pstruct_loss := outputs.struct_loss) is not None:   aux_log["pstruct_loss"] = pstruct_loss.detach().cpu().item()
+        # if (pseq_loss := outputs.seq_loss) is not None:         aux_log["pseq_loss"] = pseq_loss.detach().cpu().item()
         if (length := inputs['length']) is not None:            
             aux_log['raw_length'] = length.float().mean().cpu().item()
             aux_log['batch_length'] = inputs['labels'].shape[-1]
@@ -57,19 +58,18 @@ def main(cfg: DictConfig):
     cfg_dataset, cfg_lm, cfg_trainer = cfg.dataset, cfg.lm, cfg.trainer
     
     # facilitate wandb
-    cfg.name = f'Mprogen_B{int(os.environ["WORLD_SIZE"])}xdynamic_lr{cfg_trainer.learning_rate}'
+    cfg.name = f'Mqwen3_B{int(os.environ["WORLD_SIZE"])}xdynamic_lr{cfg_trainer.learning_rate}'
     cfg_trainer.output_dir = f'/AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/{cfg.name}'
     if (rank := int(os.environ.get("RANK", 0))) == 0:
         wandb.init(project="LLMFolding", name=cfg.name, config=OmegaConf.to_container(cfg, resolve=True)) # type: ignore
     
     # HINT: ProGen2 didn't implement `get_output_embeddings()` and therefore 
     # `model.tie_weights()` inside/outside `from_pretrained()` is actually dummy!
-    hf_config: ProGenConfig = ProGenConfig.from_pretrained(Path(cfg_lm.hf_checkpoint_dir)) # type: ignore
+    hf_config = AutoConfig.from_pretrained(Path(cfg_lm.hf_checkpoint_dir)) # type: ignore
     # hf_model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(Path(cfg_lm.pretrained_dir), torch_dtype=torch.float32) # type: ignore
-    hf_model: ProGenForCausalLM = ProGenForCausalLM(hf_config)
-    hf_model.tie_weights() # ensurement
-    hf_model.resize_token_embeddings(cfg_lm.new_vocab_size)
+    hf_model = AutoModelForCausalLM.from_config(hf_config)
     hf_model.train()
+    print(hf_model)
     
     # monomeric dataset
     full_dataset = load_dataset("json", data_files=cfg_dataset.data_dir, split="train")

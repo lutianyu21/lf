@@ -189,7 +189,7 @@ class SortishApproxBatchDataloader(torch.utils.data.DataLoader):
         world_size: int = 1,
         max_len: int = 512,
     ) -> None:
-        lens = ds['length']
+        lens = list(ds['length'])
         train_sortish_sampler = SortishSampler(
             lens,
             bucket_size,
