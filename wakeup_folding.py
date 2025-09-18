@@ -20,7 +20,7 @@ hf_model.to('cuda:0')
 hf_model.eval()
 hf_tokenizer = progen2_merged_tokenizer
 
-processor = DPLMProcessor(structure_tokenizer=dplm_tokenizer, tokenizer=progen2_merged_tokenizer)
+processor = DPLMProcessor(structure_tokenizer=dplm_tokenizer.to('cuda:0'), tokenizer=progen2_merged_tokenizer)
 GENERATION_CONFIG = GenerationConfig(
     use_cache=True,
     eos_token_id=progen2_merged_tokenizer.eos_token_id,
