@@ -9,9 +9,9 @@ output_dir: dummy
 
 # training
 num_train_epochs: 1000
-learning_rate: 2e-5
+learning_rate: 2e-6
 weight_decay: 0.01
-# max_grad_norm: 1.0
+max_grad_norm: 1.0
 warmup_steps: 1000
 fp16: False
 optim: adamw_torch
