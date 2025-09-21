@@ -27,7 +27,7 @@ GENERATION_CONFIG = GenerationConfig(
     bos_token_id=progen2_merged_tokenizer.bos_token_id,
     pad_token_id=progen2_merged_tokenizer.pad_token_id,
     do_sample=True,
-    top_k=2048,
+    top_k=40,
     temperature=0.7,
     top_p=0.4,
     max_new_tokens=2048,
@@ -55,5 +55,5 @@ for i in range(20):
     _, _, gen_structure_list = processor.decode(generated_tokens[0])
     gt_structure:   Tuple[str, OpenfoldEntity] = gt_structure_list[0]
     gen_structure:  Tuple[str, OpenfoldEntity] = gen_structure_list[0]
-    print("===== ACC =====", processor.compute_acc(gen_structure[0], gt_structure[0]))
+    print("===== ACC =====", processor.compute_acc(gen_structure[0], gt_structure[0]).item())
     print("===== RMSD =====", processor.compute_rmsd(gen_structure[1], gt_structure[1]))

@@ -130,6 +130,7 @@ class DynamicMultimodalLogitsProcessor(LogitsProcessor):
         return next_state
     
     def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
+        return scores
         B, L = input_ids.shape
         B, V = scores.shape
         scores_mask = torch.full_like(scores, float('-inf'))
@@ -154,6 +155,7 @@ class DynamicMultimodalLogitsProcessor(LogitsProcessor):
                 scores_mask[batch_id, :] = 0
             else:
                 scores_mask[batch_id, list(constraint)] = 0
-                
+        
+        print(scores)
         return scores + scores_mask
     

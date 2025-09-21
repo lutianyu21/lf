@@ -23,7 +23,6 @@ class TextCollator:
         batch_feature: Dict[str, torch.Tensor] = self.tokenizer(list(map(lambda x: x["text"], batch)), return_tensors='pt', padding=True)
         labels = batch_feature['input_ids'].clone()
         labels[labels == self.tokenizer.pad_token_id] = -100
-        batch_feature["labels"] = labels
         pseq_modality_mask = (
             (batch_feature['input_ids'] == self.tokenizer.convert_tokens_to_ids("<|boseq|>")).cumsum(dim=1) - \
             (batch_feature['input_ids'] == self.tokenizer.convert_tokens_to_ids("<|eoseq|>")).cumsum(dim=1)
@@ -32,10 +31,17 @@ class TextCollator:
             (batch_feature['input_ids'] == self.tokenizer.convert_tokens_to_ids("<|bostruct|>")).cumsum(dim=1) - \
             (batch_feature['input_ids'] == self.tokenizer.convert_tokens_to_ids("<|eostruct|>")).cumsum(dim=1)
         ).bool()
-        batch_feature["length"] = torch.tensor(list(map(lambda x: x["length"], batch)))
-        batch_feature["pseq_modality_mask"] = pseq_modality_mask
-        batch_feature["pstruct_modality_mask"] = pstruct_modality_mask
-        return batch_feature
+        input_lengths = torch.tensor(list(map(lambda x: x["length"], batch)))
+        input_lengths_raw = torch.tensor(list(map(lambda x: x["raw_length"], batch)))
+        return dict(
+            labels=labels,
+            input_ids=batch_feature['input_ids'],
+            attention_mask=batch_feature['attention_mask'],
+            input_lengths=input_lengths,
+            input_lengths_raw=input_lengths_raw,
+            pseq_modality_mask=pseq_modality_mask,
+            pstruct_modality_mask=pstruct_modality_mask,  
+        )
 
 
 class SortishSampler(torch.utils.data.Sampler):

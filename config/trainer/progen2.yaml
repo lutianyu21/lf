@@ -1,29 +1,25 @@
 # logger
-overwrite_output_dir: True
 logging_strategy: steps
-logging_steps: 1
+logging_steps: 10
 save_strategy: epoch
 save_total_limit: 1
 report_to: wandb
 output_dir: dummy
+overwrite_output_dir: True
 
-# training
+# train
 num_train_epochs: 1000
 learning_rate: 2e-6
-weight_decay: 0.01
+weight_decay: 0.05
 max_grad_norm: 1.0
 warmup_steps: 1000
 fp16: False
 optim: adamw_torch
 lr_scheduler_type: linear
 gradient_accumulation_steps: 1
-
-# ddp
-per_device_train_batch_size: 8
-dataloader_num_workers: 0
-dataloader_pin_memory: True
+per_device_train_batch_size: 8 # dummy if dynamic batching
 
 # evaluation
 per_device_eval_batch_size: 8
 evaluation_strategy: steps
-eval_steps: 200
+eval_steps: 1000
