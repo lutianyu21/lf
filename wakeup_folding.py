@@ -51,7 +51,7 @@ for i in tqdm(range(50)):
     
     nll_loss = loss.detach().cpu().item()
     gt_text = train_dataset[i]['text'] # <|bos|>~<|eos|>
-    argmax_text = '<|bos|>' + hf_tokenizer.decode(torch.argmax(hf_model(**inputs).logits[:-1], dim=-1)[0]) # <|bos|>~<|eos|>
+    argmax_text = '<|bos|>' + hf_tokenizer.decode(torch.argmax(hf_model(**inputs).logits[:, :-1], dim=-1)[0]) # <|bos|>~<|eos|>
     
     prompt = '<|bos|><|boseq|>' + train_dataset[i]['protein_text'] + '<|eoseq|><|bostruct|>'
     inputs = hf_tokenizer([prompt], return_tensors='pt', padding=True).to('cuda:0')
