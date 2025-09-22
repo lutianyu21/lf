@@ -80,7 +80,7 @@ for i in tqdm(range(50)):
     results['rmsd'].append(rmsd)
     results['gen_text'].append(generation_text)
     results['gt_text'].append(gt_text)
-    results['path'].append(train_dataset[i]['path'])
+    results['path'].append(train_dataset[i]['mmcif_path'])
     
 # save as csv
 results_df = pd.DataFrame(results)
