@@ -29,10 +29,15 @@ class TrainerWithCustomLoss(Trainer):
         outputs = model(**inputs)
         if (pstruct_loss := outputs.struct_loss) is not None:   aux_log["pstruct_loss"] = pstruct_loss.detach().cpu().item()
         if (pseq_loss := outputs.seq_loss) is not None:         aux_log["pseq_loss"] = pseq_loss.detach().cpu().item()
-        if (length := inputs['input_lengths']) is not None:            
-            aux_log['input_lengths'] = length.float().mean().cpu().item()
-            aux_log['input_lengths_raw'] = inputs['input_lengths_raw'].float().mean().cpu().item()
-            aux_log['input_lengths_batch'] = inputs['labels'].shape[-1]
+        if (length := inputs['input_lengths_total']) is not None:            
+            aux_log['input_lengths_total']  = length.float().mean().cpu().item()
+            aux_log['input_lengths_seq']    = inputs['input_lengths_seq'].float().mean().cpu().item()
+            aux_log['input_lengths_struct'] = inputs['input_lengths_struct'].float().mean().cpu().item()
+            # DEV: check OOM constraint
+            B, L = inputs['labels'].shape
+            aux_log['input_lengths_batch'] = L
+            aux_log['token_batch'] = B * L
+            aux_log['token_square_batch'] = B * L * L
             aux_log['bsz'] = length.shape[0]
         if self.is_in_train:
             self.log(aux_log)
@@ -79,7 +84,7 @@ def main(cfg: DictConfig):
     
     # monomeric dataset
     full_dataset = load_dataset("json", data_files=cfg_dataset.hf_data_dir, split="train")
-    length_dataset: Any = full_dataset.filter(lambda item: cfg_dataset.get("min_len", 0) <= item['length'] <= cfg_dataset.get("max_len", 2048))
+    length_dataset: Any = full_dataset.filter(lambda item: cfg_dataset.get("min_len", 0) <= item['lengths_seq'] <= cfg_dataset.get("max_len", 1024))
     dataset = length_dataset
     split = dataset.train_test_split(test_size=0.1, seed=2025)
     train_dataset, eval_dataset = split['train'], split['test']

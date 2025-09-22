@@ -31,14 +31,16 @@ class TextCollator:
             (batch_feature['input_ids'] == self.tokenizer.convert_tokens_to_ids("<|bostruct|>")).cumsum(dim=1) - \
             (batch_feature['input_ids'] == self.tokenizer.convert_tokens_to_ids("<|eostruct|>")).cumsum(dim=1)
         ).bool()
-        input_lengths = torch.tensor(list(map(lambda x: x["length"], batch)))
-        input_lengths_raw = torch.tensor(list(map(lambda x: x["raw_length"], batch)))
+        input_lengths_total     = torch.tensor(list(map(lambda x: x["lengths_total"], batch)))
+        input_lengths_seq       = torch.tensor(list(map(lambda x: x["lengths_seq"], batch)))
+        input_lengths_struct    = torch.tensor(list(map(lambda x: x["lengths_struct"], batch)))
         return dict(
             labels=labels,
             input_ids=batch_feature['input_ids'],
             attention_mask=batch_feature['attention_mask'],
-            input_lengths=input_lengths,
-            input_lengths_raw=input_lengths_raw,
+            input_lengths_total=input_lengths_total,
+            input_lengths_seq=input_lengths_seq,
+            input_lengths_struct=input_lengths_struct,
             pseq_modality_mask=pseq_modality_mask,
             pstruct_modality_mask=pstruct_modality_mask,  
         )
@@ -195,7 +197,7 @@ class SortishApproxBatchDataloader(torch.utils.data.DataLoader):
         world_size: int = 1,
         max_len: int = 512,
     ) -> None:
-        lens = list(ds['length'])
+        lens = list(ds['lengths_total'])
         train_sortish_sampler = SortishSampler(
             lens,
             bucket_size,
