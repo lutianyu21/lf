@@ -1,1 +1,1 @@
-from .io import OpenfoldEntity
+from .io import OpenfoldBackbone, OpenfoldProtein

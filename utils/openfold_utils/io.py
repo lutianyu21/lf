@@ -4,15 +4,18 @@ References:
 """
 
 
+from openfold.np.protein import to_pdb
+from sympy import residue
 import torch
 import gemmi
 import warnings
 import numpy as np
+import tmtools
 from pathlib import Path
 from typing import Any, Tuple, Union, Optional, Union, Dict
 
 
-__all__ = ['OpenfoldEntity', ]
+__all__ = ['OpenfoldBackbone', 'OpenfoldProtein']
 
 
 
@@ -190,134 +193,153 @@ def _gemmi_parser(
         }
     else:
         return chain2feature
-    
-    
 
 
-class OpenfoldEntity:
-    """ A protein entity, organized as Dict[str, torch.Tensor] """
+
+
+
+class OpenfoldBackbone:
+    
+    # represents a concatenated bakcbone chains
+    entry: str
+    residue_atom37_coord:   torch.Tensor
+    residue_atom37_mask:    torch.Tensor
     
     def __init__(self):
-        self.feature: Dict[str, torch.Tensor] = {}
+        pass
     
     @classmethod
-    def from_file(cls, file_path: Path):
-        assert file_path.suffix.lower() in ['.cif', '.mmcif', '.pdb'], f'Unsupported file type: {file_path.suffix}'
+    def from_file(cls, path: str | Path):
+        if isinstance(path, str): path = Path(path)
+        assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb'], f'Unsupported file type: {path.suffix}'
         instance = cls()
-        instance.feature.update(_gemmi_parser(file_path))
+        gemmi_out = _gemmi_parser(path)
+        instance.entry = path.stem
+        instance.residue_atom37_coord = gemmi_out['residue_atom37_coord']
+        instance.residue_atom37_mask = gemmi_out['residue_atom37_mask']
         return instance
     
     @classmethod
-    def from_feature(cls, feature: Dict[str, torch.Tensor]):
-        # `aatype` only decide the 3-char type field rather than `atom37_mask`
-        atom37_coord = feature['residue_atom37_coord']
-        atom37_mask = feature['residue_atom37_mask']
-        L, device = atom37_coord.size(0), atom37_coord.device
-        feature.setdefault('residue_mask', atom37_mask[:, 1]).to(dtype_template['residue_mask'])
-        feature.setdefault('residue_atom37_bfactor', torch.zeros(L, atom_type_num, device=device, dtype=dtype_template['residue_atom37_bfactor']))
-        feature.setdefault('residue_aatype', torch.zeros(L, device=device, dtype=dtype_template['residue_aatype']))
-        feature.setdefault('residue_index', torch.arange(L, device=device, dtype=dtype_template['residue_index']))
-        feature.setdefault('residue_chain_index', torch.zeros(L, device=device, dtype=dtype_template['residue_chain_index']))
+    def from_dict(cls, feature_in: Dict[str, Any]):
         instance = cls()
-        instance.feature.update(feature)
+        instance.entry = feature_in.get('entry', 'unknown')
+        instance.residue_atom37_coord = feature_in['residue_atom37_coord']
+        instance.residue_atom37_mask = feature_in['residue_atom37_mask']
         return instance
+    
+    def __len__(self) -> int:
+        return self.residue_atom37_coord.size(0)
+    
+    def to(self, device: str | torch.device):
+        self.residue_atom37_coord = self.residue_atom37_coord.to(device)
+        self.residue_atom37_mask = self.residue_atom37_mask.to(device)
+        return self
+    
+    def to_pdb(self, path: str | Path):
+        if isinstance(path, str): path = Path(path)
+        raise NotImplementedError('Incomplete feature. Cast to OpenfoldProtein first !')
         
     @property
-    def shape(self) -> Dict[str, Any]:
-        return {k:v.shape for k,v in self.feature.items()}
-    
-    @property
     def device(self) -> torch.device:
-        return self.aatype.device
+        return self.residue_atom37_coord.device
     
-    @property
-    def dtype(self) -> Dict[str, Any]:
-        return {k:v.dtype for k,v in self.feature.items()}
+
+class OpenfoldProtein:
     
-    @property
-    def aatype(self) -> torch.Tensor:
-        return self.feature['residue_aatype']
+    # represents a complete protein with additional metadata
+    entry: str
+    residue_atom37_coord:   torch.Tensor
+    residue_atom37_mask:    torch.Tensor
+    residue_mask:           torch.Tensor
+    residue_aatype:         torch.Tensor
+    residue_index:          torch.Tensor
+    residue_chain_index:    torch.Tensor
+    residue_atom37_bfactor: torch.Tensor
     
-    @property
-    def bfactor(self) -> torch.Tensor:
-        return self.feature['residue_bfactor']
+    def __init__(self):
+        super().__init__()
+
+    @classmethod
+    def from_file(cls, path: str | Path):
+        if isinstance(path, str): path = Path(path)
+        assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb'], f'Unsupported file type: {path.suffix}'
+        instance = cls()
+        gemmi_out = _gemmi_parser(path)
+        instance.entry = path.stem
+        instance.residue_atom37_coord   = gemmi_out['residue_atom37_coord']
+        instance.residue_atom37_mask    = gemmi_out['residue_atom37_mask']
+        instance.residue_mask           = gemmi_out['residue_mask']
+        instance.residue_aatype         = gemmi_out['residue_aatype']
+        instance.residue_index          = gemmi_out['residue_index']
+        instance.residue_chain_index    = gemmi_out['residue_chain_index']
+        instance.residue_atom37_bfactor = gemmi_out['residue_atom37_bfactor']
+        return instance
+
+    @classmethod
+    def from_dict(cls, feature_in: Dict[str, Any]):
+        instance = cls()
+        instance.entry = feature_in.get('entry', 'unknown')
+        instance.residue_atom37_coord = feature_in['residue_atom37_coord']
+        instance.residue_atom37_mask = feature_in['residue_atom37_mask']
+        instance.residue_mask = feature_in['residue_mask']
+        instance.residue_aatype = feature_in['residue_aatype']
+        instance.residue_index = feature_in['residue_index']
+        instance.residue_chain_index = feature_in['residue_chain_index']
+        instance.residue_atom37_bfactor = feature_in['residue_atom37_bfactor']
+        return instance
     
-    @property
-    def residue_idx(self) -> torch.Tensor:
-        return self.feature['residue_idx']
+    @classmethod
+    def from_backbone(cls, backbone: OpenfoldBackbone):
+        instance = cls()
+        instance.entry = backbone.entry
+        instance.residue_atom37_coord = backbone.residue_atom37_coord
+        instance.residue_atom37_mask = backbone.residue_atom37_mask
+        L, device = len(backbone), backbone.residue_atom37_coord.device
+        instance.residue_mask = backbone.residue_atom37_mask[:, 1].to(dtype_template['residue_mask'])
+        instance.residue_aatype = torch.zeros(L, device=device, dtype=dtype_template['residue_aatype'])
+        instance.residue_index = torch.arange(L, device=device, dtype=dtype_template['residue_index'])
+        instance.residue_chain_index = torch.zeros(L, device=device, dtype=dtype_template['residue_chain_index'])
+        instance.residue_atom37_bfactor = torch.zeros(L, atom_type_num, device=device, dtype=dtype_template['residue_atom37_bfactor'])
+        return instance
     
-    @property
-    def residue_mask(self) -> torch.Tensor:
-        return self.feature['residue_mask']
+    def __len__(self) -> int:
+        return self.residue_atom37_coord.size(0)
     
-    @property
-    def ca_coord(self) -> torch.Tensor:
-        ca_mask = self.feature['residue_atom37_mask'][:, atom_order['CA']]
-        ca_coord = self.feature['residue_atom37_coord'][:, atom_order['CA'], :]
-        impute_coord = ca_coord.new_zeros(ca_coord.shape)
-        return ca_coord * ca_mask[:, None] + impute_coord * (1 - ca_mask[:, None])
-    
-    @property
-    def cb_coord(self) -> torch.Tensor:
-        cb_mask = self.feature['residue_atom37_mask'][:, atom_order['CB']]
-        cb_coord = self.feature['residue_atom37_coord'][:, atom_order['CB'], :]
-        impute_coord = self.ca_coord
-        return cb_coord * cb_mask[:, None] + impute_coord * (1 - cb_mask[:, None])
-    
-    @property
-    def backbone_coord(self) -> torch.Tensor:
-        backbone_atom_order = [atom_order['N'], atom_order['CA'], atom_order['C'], atom_order['CB'], atom_order['O']]
-        backbone_atom5_coord = self.feature['residue_atom37_coord'][:, backbone_atom_order]
-        return backbone_atom5_coord.reshape(-1, 3)
-    
-    @property
-    def ca_contact(self) -> Tuple[torch.Tensor, ...]:
-        ca_coord = self.ca_coord
-        dist_matrix = torch.cdist(ca_coord, ca_coord)
-        contact_map = (dist_matrix < 8.0).float()
-        return contact_map, dist_matrix
-    
-    @property
-    def cb_contact(self) -> Tuple[torch.Tensor, ...]:
-        cb_coord = self.cb_coord
-        dist_matrix = torch.cdist(cb_coord, cb_coord)
-        contact_map = (dist_matrix < 8.0).float()
-        return contact_map, dist_matrix
-    
-    def __str__(self):
+    def __str__(self) -> str:
         res_shortname = np.fromiter(
-            map(lambda i: restypes_with_x[i], self.feature['residue_aatype']),
+            map(lambda i: restypes_with_x[i], self.residue_aatype.cpu().numpy()),
             dtype='U1'
         )
         s = ''.join(res_shortname)
         return s
     
-    def __len__(self):
-        return self.feature['residue_atom37_coord'].size(0)
-    
-    def to(self, device: Union[str, torch.device]):
-        for k,v in self.feature.items(): self.feature[k] = v.to(device)
+    def to(self, device: str | torch.device):
+        self.residue_atom37_coord = self.residue_atom37_coord.to(device)
+        self.residue_atom37_mask = self.residue_atom37_mask.to(device)
+        self.residue_mask = self.residue_mask.to(device)
+        self.residue_aatype = self.residue_aatype.to(device)
+        self.residue_index = self.residue_index.to(device)
+        self.residue_chain_index = self.residue_chain_index.to(device)
+        self.residue_atom37_bfactor = self.residue_atom37_bfactor.to(device)
         return self
     
-    def to_pickle(self, pickle_path: Path):
-        torch.save(self.feature, pickle_path)
-    
-    def to_pdb(self, pdb_path: Path):
-        pdb_path.parent.mkdir(parents=True, exist_ok=True)
+    def to_pdb(self, path: str | Path): 
+        if isinstance(path, str): path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         pdb_string = self.to_pdb_string()
-        pdb_path.write_text(pdb_string)
-
+        path.write_text(pdb_string)
+        
     def to_pdb_string(self, model: int = 1, add_end: bool = True) -> str:
         res_1to3 = lambda r: restype_1to3.get(restypes_with_x[r], 'UNK')
         atom37_types = atom_types
         # pdb is a column format
         pdb_lines: list[str] = []
-        atom_positions = self.feature['residue_atom37_coord'].cpu().numpy()
-        atom_mask = self.feature['residue_atom37_mask'].cpu().numpy()
-        residue_index = self.feature['residue_index'].cpu().numpy()
-        chain_index = self.feature['residue_chain_index'].cpu().numpy()
-        aatype = self.feature['residue_aatype'].cpu().numpy()
-        b_factors = self.feature['residue_atom37_bfactor'].cpu().numpy()
+        atom_positions = self.residue_atom37_coord.cpu().numpy()
+        atom_mask = self.residue_atom37_mask.cpu().numpy()
+        residue_index = self.residue_index.cpu().numpy()
+        chain_index = self.residue_chain_index.cpu().numpy()
+        aatype = self.residue_aatype.cpu().numpy()
+        b_factors = self.residue_atom37_bfactor.cpu().numpy()
         
         # simple format check  
         if np.any(aatype > restype_num):
@@ -375,4 +397,56 @@ class OpenfoldEntity:
         pdb_lines = [line.ljust(80) for line in pdb_lines]
         pdb_string = '\n'.join(pdb_lines) + '\n'  # add terminating newline
         return pdb_string
+
+    def inherit(self, other: 'OpenfoldProtein'):
+        # remain coordinate and mask, inherit other metadata, usually called after from_backbone()
+        self.entry = other.entry
+        # clear variable to release memory immediately
+        del self.residue_aatype
+        del self.residue_index
+        del self.residue_chain_index
+        del self.residue_atom37_bfactor
+        self.residue_aatype = other.residue_aatype.clone().to(self.device)
+        self.residue_index = other.residue_index.clone().to(self.device)
+        self.residue_chain_index = other.residue_chain_index.clone().to(self.device)
+        self.residue_atom37_bfactor = other.residue_atom37_bfactor.clone().to(self.device)
+
+    def align_with(self, other: 'OpenfoldProtein', chain_wise: bool = False) -> Tuple[float, float]:
+        assert len(self) == len(other), 'Length mismatch.'
+        src_array = self.calpha.cpu().numpy()
+        dst_array = other.cbeta.cpu().numpy()
+        # if chain-wise, split according to chain_index and calculate separately
+        if chain_wise:
+            assert torch.equal(self.residue_chain_index, other.residue_chain_index), 'Chain index mismatch. Call inherit() first ?'
+            unique_chain_idx = torch.unique(self.residue_chain_index)
+            tmscore_list, rmsd_list = [], []
+            for cidx in unique_chain_idx:
+                cidx_mask = (self.residue_chain_index == cidx).cpu().numpy()
+                src_c = src_array[cidx_mask]
+                dst_c = dst_array[cidx_mask]
+                dummy_seq = 'A' * sum(cidx_mask)
+                result = tmtools.tm_align(src_c, dst_c, dummy_seq, dummy_seq)
+                tmscore_list.append(result.tm_norm_chain1)
+                rmsd_list.append(result.rmsd)
+            return float(np.mean(tmscore_list)), float(np.mean(rmsd_list))
+        else:
+            result = tmtools.tm_align(src_array, dst_array, str(self), str(other))
+            return result.tm_norm_chain1, result.rmsd
+
+    @property
+    def device(self) -> torch.device:
+        return self.residue_atom37_coord.device
     
+    @property
+    def calpha(self) -> torch.Tensor:
+        ca_mask = self.residue_atom37_mask[:, atom_order['CA']]
+        ca_coord = self.residue_atom37_coord[:, atom_order['CA'], :]
+        impute_coord = ca_coord.new_zeros(ca_coord.shape)
+        return ca_coord * ca_mask[:, None] + impute_coord * (1 - ca_mask[:, None])
+
+    @property
+    def cbeta(self) -> torch.Tensor:
+        cb_mask = self.residue_atom37_mask[:, atom_order['CB']]
+        cb_coord = self.residue_atom37_coord[:, atom_order['CB'], :]
+        impute_coord = self.calpha
+        return cb_coord * cb_mask[:, None] + impute_coord * (1 - cb_mask[:, None])

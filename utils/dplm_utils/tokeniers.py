@@ -5,7 +5,7 @@ from pathlib import Path
 from byprot.models.structok.structok_lfq import VQModel
 import torch
 
-from utils.openfold_utils.io import OpenfoldEntity
+from utils.openfold_utils.io import OpenfoldBackbone, OpenfoldProtein
 
 __all__ = ['DPLMTokenizer', 'dplm_tokenizer']
 
@@ -22,7 +22,8 @@ class DPLMTokenizer:
         self.tokenizer = tokenizer
     
     @torch.no_grad
-    def batch_tokenize(self,
+    def batch_tokenize(
+        self,
         residue_atom37_coord: torch.Tensor,     # [B, L, 37]
         residue_missing_mask: torch.Tensor,     # [B, L] wo/ loss
         unpadded_length: torch.Tensor           # [B]     w/ loss   
@@ -31,15 +32,16 @@ class DPLMTokenizer:
         return self.tokenizer.tokenize(residue_atom37_coord, 1 - residue_missing_mask, unpadded_length)
     
     @torch.no_grad
-    def batch_detokenize(self,
-        residue_structure_token: torch.Tensor,  # [B, L]
-        residue_missing_mask: Optional[torch.Tensor], # [B, L]
-    ) -> OpenfoldEntity:                          # [B, L, 37]
-        output = self.tokenizer.detokenize(residue_structure_token, 1 - residue_missing_mask if residue_missing_mask is not None else None)
-        return OpenfoldEntity.from_feature({
+    def batch_detokenize(
+        self,         
+        struct_tokens: torch.Tensor,            # [B, L]
+        res_mask: Optional[torch.Tensor],       # [B, L]
+    ) -> OpenfoldProtein:
+        output = self.tokenizer.detokenize(struct_tokens=struct_tokens, res_mask=res_mask)
+        return OpenfoldProtein.from_backbone(OpenfoldBackbone.from_dict({
             'residue_atom37_coord': output['atom37_positions'].squeeze(0),
-            'residue_atom37_mask': output['atom37_mask'].squeeze(0)
-        })
+            'residue_atom37_mask':  output['atom37_mask'].squeeze(0)
+        }))
     
     def to(self, device: Union[str, torch.device]):
         self.tokenizer.to(device)

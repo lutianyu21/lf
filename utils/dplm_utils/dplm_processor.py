@@ -3,11 +3,7 @@ import numpy as np
 from transformers import ProcessorMixin, PreTrainedTokenizerFast
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.tokenization_utils_base import TextInput, PreTokenizedInput
-from transformers.trainer_pt_utils import nested_numpify, nested_detach
-
-from utils.progen2_utils import progen2_merged_tokenizer
-from utils.openfold_utils import OpenfoldEntity
-from utils.protenix_utils import rmsd_globally_aligned
+from utils.openfold_utils import OpenfoldProtein
 from .tokeniers import DPLMTokenizer
 
 from typing import Any, Dict, Optional, List, Tuple
@@ -37,25 +33,20 @@ class DPLMProcessor(ProcessorMixin):
     def __call__(
         self,
         protein_text: TextInput | PreTokenizedInput,
-        protein_struct: OpenfoldEntity | List[OpenfoldEntity],
-        text: Optional[TextInput | PreTokenizedInput] = None,
-        train_task: str = 'folding_lm',
-        eval_task: str = 'folding_lm',
+        protein_struct: OpenfoldProtein | List[OpenfoldProtein],
+        train_task: str = 'folding',
+        eval_task: str = 'folding',
         **kwargs,
     ) -> Tuple[BatchFeature, BatchFeature]:
         
         if isinstance(protein_text, str): protein_text = [protein_text]
-        if isinstance(protein_struct, OpenfoldEntity): protein_struct = [protein_struct]
-        protein_struct_text: List[str] = self.tokenize_structure(protein_struct, as_str=True)
+        if isinstance(protein_struct, OpenfoldProtein): protein_struct = [protein_struct]
+        protein_struct_text: List[str] = self.tokenize_structure(protein_struct, as_str=True) # type: ignore
             
-        assert train_task in ['folding_lm', 'seq_lm', 'struct_lm']
-        assert eval_task in ['folding_lm', 'seq_lm', 'struct_lm']
+        assert train_task in ['folding', 'seq-only', 'struct-only'] and \
+                eval_task in ['folding', 'seq-only', 'struct-only']
         
-        # training templates
-        # folding lm:   <pad><pad><bos><boseq>xxx<eoseq><bostruct>yyy<eostruct><eos>
-        # seq lm:       <pad><pad><bos><boseq>xxx<eoseq><eos>
-        # struct lm:    <pad><pad><bos><bostruct>yyy<eostruct><eos>
-        if train_task == 'folding_lm':
+        if train_task == 'folding':
             prompt_train: List[str] = list(map(
                 lambda t, s: ''.join([
                     self.tokenizer.bos_token,
@@ -67,7 +58,7 @@ class DPLMProcessor(ProcessorMixin):
                 protein_struct_text
             ))
         
-        elif train_task == 'seq_lm':
+        elif train_task == 'seq-only':
             prompt_train: List[str] = list(map(
                 lambda t: ''.join([
                     self.tokenizer.bos_token,
@@ -77,7 +68,7 @@ class DPLMProcessor(ProcessorMixin):
                 protein_text,
             ))
             
-        elif train_task == 'struct_lm':
+        elif train_task == 'struct-only':
             prompt_train: List[str] = list(map(
                 lambda s: ''.join([
                     self.tokenizer.bos_token,
@@ -88,9 +79,8 @@ class DPLMProcessor(ProcessorMixin):
             ))
         
         # eval_templates
-        # folding lm    <pad><pad><bos><boseq>xxx<eoseq><bostruct>
-        if eval_task == 'folding_lm':
-            # for evaluation, prompt should be shorter than label
+        if eval_task == 'folding':
+            # for evaluation, prompt will be shorter than label
             prompt_eval: List[str] = list(map(
             lambda t: ''.join([
                 self.tokenizer.bos_token,
@@ -132,15 +122,15 @@ class DPLMProcessor(ProcessorMixin):
             raise NotImplementedError() # TODO
         
         return BatchFeature(inputs_train), BatchFeature(inputs_eval)
-    
-    def tokenize_structure(self, protein_structure: List[OpenfoldEntity], as_str: bool = False) -> List[Any]:
+
+    def tokenize_structure(self, protein_structure: List[OpenfoldProtein], as_str: bool = False) -> List[str | torch.Tensor]:
         structure_tokens = []
         for ps in protein_structure:
             ps = ps.to(self.structure_tokenizer.device) 
             input = {
-                'residue_atom37_coord': ps.feature['residue_atom37_coord'].unsqueeze(0),    # [B, L, 37]
-                'residue_missing_mask': 1 - ps.feature['residue_mask'].unsqueeze(0),        # [B, L] wo/ loss
-                'unpadded_length': torch.tensor([len(ps)], device=ps.device)                # [B]     w/ loss          
+                'residue_atom37_coord': ps.residue_atom37_coord.unsqueeze(0),    # [B, L, 37]
+                'residue_missing_mask': 1 - ps.residue_mask.unsqueeze(0),        # [B, L] wo/ loss
+                'unpadded_length': torch.tensor([len(ps)], device=ps.device)     # [B]     w/ loss          
             }
             token_tensor = self.structure_tokenizer.batch_tokenize(**input).squeeze(0)
             token_str = "".join([
@@ -151,33 +141,39 @@ class DPLMProcessor(ProcessorMixin):
         return structure_tokens
     
     @torch.no_grad()
-    def decode(self, *args, **kwargs):
+    def decode(self, *args, **kwargs) -> Dict[str, Any]:
         doc = self.tokenizer.decode(*args, **kwargs)
         return self.multimodal_decode(doc, **kwargs)
     
     @torch.no_grad()
-    def multimodal_decode(self, doc, **kwargs) -> Tuple[List[str], List[str], List[Tuple[str, OpenfoldEntity]]]:
-        text_output, structure_output, multimodal_output = [], [], []
+    def multimodal_decode(self, doc, **kwargs) -> Dict[str, Any]:
+        seq_output, struct_output, entity_output, multimodal_output = [], [], [], []
         pattern = rf'({re.escape(self.tokenizer.bostruct_token)}.*?{re.escape(self.tokenizer.eostruct_token)})'
         chunks = re.split(pattern, doc)
-        for c in chunks:
+        for i, c in enumerate(chunks):
             if len(c) == 0: continue
             if self.tokenizer.bostruct_token in c:
                 # as structure
-                input = {
-                    'residue_structure_token': torch.tensor(
+                dplm_decoder_input = {
+                    'struct_tokens': torch.tensor(
                         [int(m) for m in re.findall(self.structure_template[1], c)], device=self.structure_tokenizer.device
                     ).unsqueeze(0),
-                    'residue_missing_mask': kwargs.get('residue_missing_mask')
+                    'res_mask': None,
                 }
-                output = self.structure_tokenizer.batch_detokenize(**input)
-                structure_output.append((c, output))
+                output = self.structure_tokenizer.batch_detokenize(**dplm_decoder_input)
+                struct_output.append(c)
+                entity_output.append(output)
                 multimodal_output.append(output)
             else:
                 # as text
-                text_output.append(c)
+                seq_output.append(c)
                 multimodal_output.append(c)
-        return multimodal_output, text_output, structure_output
+        return {
+            'multimodal':   multimodal_output,
+            'seq':          seq_output,
+            'struct':       struct_output,
+            'entity':       entity_output
+        }
     
     def constant_helper(self) -> Dict[str, int]:
         (
@@ -214,15 +210,13 @@ class DPLMProcessor(ProcessorMixin):
             'struct_tokens': struct_tokens
         }
 
-    def compute_rmsd(self, structure1: OpenfoldEntity, structure2: OpenfoldEntity) -> float:
-        pred_pose = structure1.backbone_coord
-        true_pose = structure2.backbone_coord
-        return rmsd_globally_aligned(
-            pred_pose, true_pose, pred_pose.new_ones(pred_pose.shape[:-1], dtype=torch.bool)
-        )[0].item()
+    def compute_align(self, structure1: OpenfoldProtein, structure2: OpenfoldProtein) -> Tuple[float, float]:
+        # HINT: structure1 is decoded thus requires metadata from structure2
+        structure1.inherit(structure2)
+        return structure1.align_with(structure2, chain_wise=True)
     
     def compute_acc(self, structure1: str, structure2: str) -> float:
-        pred_token = self.tokenizer.encode(structure1, return_tensors='pt')[:, 1:-1]
-        true_token = self.tokenizer.encode(structure2, return_tensors='pt')[:, 1:-1]
-        return ((pred_token == true_token).sum() / pred_token.size(-1)) * 100
+        pred_token = self.tokenizer.encode(structure1, return_tensors='pt')
+        true_token = self.tokenizer.encode(structure2, return_tensors='pt')
+        return ((pred_token == true_token).sum() / pred_token.size(-1)).item() * 100
     
