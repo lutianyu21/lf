@@ -258,16 +258,27 @@ class LFTrainer(Trainer):
         # convert preds to tensor
         for k in tmp.keys():
             preds[k] = torch.tensor(tmp[k], device=device) # all batched [B]
+        preds['dev'] = inputs['dev'] # [B]
         
         model.train()
         return (exposure_loss, preds, labels)
         
 
 def lf_metrics(eval_pred: EvalPrediction):
-    # simply collect and calculate me
-    metrics = {
-        k: float(v.mean()) for k, v in eval_pred.predictions.items() # type: ignore
-    }
+    preds: Dict[str, np.ndarray] = eval_pred.predictions # type: ignore
+    # group average by `dev` field in `preds`
+    # add prefix `overfit`(when `dev`=1) or `test`(when `dev`=2)
+    df = pd.DataFrame({k: v for k, v in preds.items()})
+    metrics = {}
+    for dev, group in df.groupby('dev'):
+        prefix = 'overfit' if dev == 1 else 'test'
+        metrics[f'{prefix}_tm_rec'] = group['tm_rec'].mean()
+        metrics[f'{prefix}_tm_dec'] = group['tm_dec'].mean()
+        metrics[f'{prefix}_tm_gen'] = group['tm_gen'].mean()
+        metrics[f'{prefix}_rmsd_rec'] = group['rmsd_rec'].mean()
+        metrics[f'{prefix}_rmsd_dec'] = group['rmsd_dec'].mean()
+        metrics[f'{prefix}_rmsd_gen'] = group['rmsd_gen'].mean()
+        metrics[f'{prefix}_token_acc'] = group['token_acc'].mean()
     return metrics
 
 
@@ -315,11 +326,22 @@ def main(config: DictConfig):
         'radius_gyration': Value('float32'),
         'avg_plddt': Value('float32'),
     })
+    
     ds = load_dataset("json", data_files=config_dataset.hf_data_dir, split="train", features=features) # type: ignore
-    # currently, our context length <= 2048
     ds = ds.filter(lambda x: x['total_length'] <= 2048)         # type: ignore
     split = ds.train_test_split(test_size=100, seed=2025)      # type: ignore
     train_dataset, eval_dataset = split['train'], split['test']
+    # here we construct a hybrid evaluation dataset
+    # including 100 items from split['test] and 100 items from split['train']
+    subsplit = train_dataset.train_test_split(test_size=100, seed=2025) # type: ignore
+    overfit_dataset = subsplit['test']
+    
+    # however we need to add a new field 'dev' to distinguish them
+    # for train 'dev' = 0, for overfit 'dev' = 1, for test 'dev' = 2
+    train_dataset = train_dataset.add_column("dev", [0] * len(train_dataset))    # type: ignore
+    overfit_dataset = overfit_dataset.add_column("dev", [1] * len(overfit_dataset)) # type: ignore
+    eval_dataset = eval_dataset.add_column("dev", [2] * len(eval_dataset))       # type: ignore
+    eval_dataset = datasets.concatenate_datasets([overfit_dataset, eval_dataset]) # type: ignore
     print(f"train: {len(train_dataset)} items, eval: {len(eval_dataset)} items")
     
     # hf-style trainer

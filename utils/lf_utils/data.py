@@ -43,6 +43,7 @@ class TextCollator:
         total_length = torch.tensor(list(map(lambda x: x["total_length"], batch)))
         pdb_name = list(map(lambda x: x["pdb_name"], batch))
         split = list(map(lambda x: x["split"], batch))
+        dev = torch.tensor(list(map(lambda x: x["dev"], batch)))
     
         return dict(
             labels=labels,
@@ -55,6 +56,7 @@ class TextCollator:
             struct_length=struct_length,
             pdb_name=pdb_name,
             split=split,
+            dev=dev
         )
 
 
