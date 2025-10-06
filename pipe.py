@@ -274,15 +274,6 @@ def lf_metrics(eval_pred: EvalPrediction):
 @hydra.main(version_base=None, config_path="./config", config_name="config.yaml")
 def main(config: DictConfig):
     
-    test = Path('/AIRvePFS/ai4science/users/tianyu/lf/data/rcsb_mmcif/7k68.cif')
-    # test whether flie exists
-    print("================")
-    print(test.exists())
-    print(OpenfoldProtein.from_file(test))
-    
-    
-    return
-    
     config_dataset, config_lm, config_trainer = config.dataset, config.lm, config.trainer
     config.name = "M{}_D{}_B{}x{}x{}".format(
         config_lm.get('hf_model_type', 'dummy'),
