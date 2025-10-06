@@ -70,7 +70,7 @@ pip config list
 
 echo "=== Installing dplm env ==="
 PIP=/root/miniconda3/envs/dplm/bin/pip
-$PIP install ray
+$PIP install ray --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
 $PIP show torch >/dev/null 2>&1 || $PIP install \
     --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
     torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu121
