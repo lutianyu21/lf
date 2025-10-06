@@ -315,7 +315,9 @@ def main(config: DictConfig):
         'avg_plddt': Value('float32'),
     })
     ds = load_dataset("json", data_files=config_dataset.hf_data_dir, split="train", features=features) # type: ignore
-    split = ds.train_test_split(test_size=100, seed=2025) # type: ignore
+    # currently, our context length <= 2048
+    ds = ds.filter(lambda x: x['total_length'] <= 2048)         # type: ignore
+    split = ds.train_test_split(test_size=100, seed=2025)      # type: ignore
     train_dataset, eval_dataset = split['train'], split['test']
     print(f"train: {len(train_dataset)} items, eval: {len(eval_dataset)} items")
     
