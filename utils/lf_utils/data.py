@@ -55,7 +55,6 @@ class TextCollator:
             struct_length=struct_length,
             pdb_name=pdb_name,
             split=split,
-            
         )
 
 
