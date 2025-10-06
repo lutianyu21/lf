@@ -8,6 +8,8 @@ import torch.distributed as dist
 import math
 import numpy as np
 
+from .protein_processor import ProteinProcessor
+
 __all__ = [
     'TextCollator',
     'SortishApproxBatchDataloader'
@@ -16,33 +18,44 @@ __all__ = [
 
 class TextCollator:
     # handle pure-text dataset
-    def __init__(self, tokenizer) -> None:
-        self.tokenizer = tokenizer
+    def __init__(self, processor: ProteinProcessor, eval_mode: bool = False):
+        self.processor = processor
+        self.eval_mode = eval_mode
     
     def __call__(self, batch: List[Dict[str, Any]]) -> Any:
-        batch_feature: Dict[str, torch.Tensor] = self.tokenizer(list(map(lambda x: x["text"], batch)), return_tensors='pt', padding=True)
-        labels = batch_feature['input_ids'].clone()
-        labels[labels == self.tokenizer.pad_token_id] = -100
-        pseq_modality_mask = (
-            (batch_feature['input_ids'] == self.tokenizer.convert_tokens_to_ids("<|boseq|>")).cumsum(dim=1) - \
-            (batch_feature['input_ids'] == self.tokenizer.convert_tokens_to_ids("<|eoseq|>")).cumsum(dim=1)
-        ).bool()
-        pstruct_modality_mask = (
-            (batch_feature['input_ids'] == self.tokenizer.convert_tokens_to_ids("<|bostruct|>")).cumsum(dim=1) - \
-            (batch_feature['input_ids'] == self.tokenizer.convert_tokens_to_ids("<|eostruct|>")).cumsum(dim=1)
-        ).bool()
-        input_lengths_total     = torch.tensor(list(map(lambda x: x["lengths_total"], batch)))
-        input_lengths_seq       = torch.tensor(list(map(lambda x: x["lengths_seq"], batch)))
-        input_lengths_struct    = torch.tensor(list(map(lambda x: x["lengths_struct"], batch)))
+        
+        train_feature: Dict[str, torch.Tensor] = self.processor.tokenizer(
+            list(map(lambda x: x["text"], batch)),
+            return_tensors='pt',
+            padding=True
+        ) # type: ignore
+        
+        eval_feature: Dict[str, torch.Tensor] = self.processor.tokenizer(
+            list(map(lambda x: x["prompt"], batch)),
+            return_tensors='pt',
+            padding=True
+        ) # type: ignore
+       
+        labels = train_feature['input_ids'].clone()
+        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        seq_length = torch.tensor(list(map(lambda x: x["seq_length"], batch)))
+        struct_length = torch.tensor(list(map(lambda x: x["struct_length"], batch)))
+        total_length = torch.tensor(list(map(lambda x: x["total_length"], batch)))
+        pdb_name = list(map(lambda x: x["pdb_name"], batch))
+        split = list(map(lambda x: x["split"], batch))
+    
         return dict(
             labels=labels,
-            input_ids=batch_feature['input_ids'],
-            attention_mask=batch_feature['attention_mask'],
-            input_lengths_total=input_lengths_total,
-            input_lengths_seq=input_lengths_seq,
-            input_lengths_struct=input_lengths_struct,
-            pseq_modality_mask=pseq_modality_mask,
-            pstruct_modality_mask=pstruct_modality_mask,  
+            input_ids=train_feature['input_ids'],
+            attention_mask=train_feature['attention_mask'], # exposure
+            eval_input_ids=eval_feature['input_ids'],
+            eval_attention_mask=eval_feature['attention_mask'],
+            total_length=total_length,
+            seq_length=seq_length,
+            struct_length=struct_length,
+            pdb_name=pdb_name,
+            split=split,
+            
         )
 
 
@@ -197,7 +210,7 @@ class SortishApproxBatchDataloader(torch.utils.data.DataLoader):
         world_size: int = 1,
         max_len: int = 512,
     ) -> None:
-        lens = list(ds['lengths_total'])
+        lens = list(ds['total_length'])
         train_sortish_sampler = SortishSampler(
             lens,
             bucket_size,

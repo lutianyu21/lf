@@ -1,31 +1,52 @@
+from openfold.np import protein
 import transformers
 import numpy as np
 from transformers import ProcessorMixin, PreTrainedTokenizerFast
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.tokenization_utils_base import TextInput, PreTokenizedInput
-from utils.openfold_utils import OpenfoldProtein
-from .tokeniers import DPLMTokenizer
+from transformers import PreTrainedTokenizerBase
 
-from typing import Any, Dict, Optional, List, Tuple
+from utils.openfold_utils import OpenfoldProtein
+from .tokenizers import DistTokenizer
+
+from typing import Any, Dict, Optional, List, Tuple, Union
+from dataclasses import dataclass
+
+
 import torch
 import re
 
 
+__all__ = ['DistProcessor']
 
-class DPLMProcessor(ProcessorMixin):
+
+
+
+@dataclass
+class LFTokenizer:
+    bos_token: int
+    eos_token: int
+    boseq_token: int
+    eoseq_token: int
+    bostruct_token: int
+    eostruct_token: int
+    
+
+class DistProcessor(ProcessorMixin):
     
     attributes = ["tokenizer"]
     tokenizer_class = "PreTrainedTokenizerFast"
 
     def __init__(
         self,
-        tokenizer: Any,
-        structure_tokenizer: DPLMTokenizer,
-        structure_template: Tuple[str, str] = ("<|struct{token_id:0>4d}|>", r"<\|struct(\d{4})\|>"),
+        tokenizer: PreTrainedTokenizerBase,
+        struct_tokenizer: DistTokenizer,
+        struct_template: Tuple[str, str] = ("<|struct{token_id:0>4d}|>", r"<\|struct(\d{4})\|>"),
+        struct_vsz: int = 2048,
     ):
-        self.structure_tokenizer = structure_tokenizer
-        self.structure_template = structure_template
-        self.structure_vocab_size = 8192
+        self.struct_tokenizer = struct_tokenizer
+        self.struct_template = struct_template
+        self.struct_vocab_size = struct_vsz
         self.tokenizer = tokenizer
         super().__init__(tokenizer)
     
@@ -126,13 +147,12 @@ class DPLMProcessor(ProcessorMixin):
     def tokenize_structure(self, protein_structure: List[OpenfoldProtein], as_str: bool = False) -> List[str | torch.Tensor]:
         structure_tokens = []
         for ps in protein_structure:
-            ps = ps.to(self.structure_tokenizer.device) 
+            ps = ps.to(self.structure_tokenizer.device)   
             input = {
-                'residue_atom37_coord': ps.residue_atom37_coord.unsqueeze(0),    # [B, L, 37]
-                'residue_missing_mask': 1 - ps.residue_mask.unsqueeze(0),        # [B, L] wo/ loss
-                'unpadded_length': torch.tensor([len(ps)], device=ps.device)     # [B]     w/ loss          
+                "distance": ps.distance_matrix(),
+                "raw_length": len(ps)
             }
-            token_tensor = self.structure_tokenizer.batch_tokenize(**input).squeeze(0)
+            token_tensor = self.structure_tokenizer.tokenize(**input)
             token_str = "".join([
                 self.structure_template[0].format(token_id=token_id)
                 for token_id in token_tensor.cpu().tolist()
@@ -154,13 +174,13 @@ class DPLMProcessor(ProcessorMixin):
             if len(c) == 0: continue
             if self.tokenizer.bostruct_token in c:
                 # as structure
-                dplm_decoder_input = {
-                    'struct_tokens': torch.tensor(
+                input = {
+                    'vocab_ids': torch.tensor(
                         [int(m) for m in re.findall(self.structure_template[1], c)], device=self.structure_tokenizer.device
-                    ).unsqueeze(0),
-                    'res_mask': None,
+                    ),
+                    'raw_length': kwargs['raw_lengths']
                 }
-                output = self.structure_tokenizer.batch_detokenize(**dplm_decoder_input)
+                output = self.structure_tokenizer.detokenize(**input)
                 struct_output.append(c)
                 entity_output.append(output)
                 multimodal_output.append(output)
@@ -193,8 +213,9 @@ class DPLMProcessor(ProcessorMixin):
             self.tokenizer.bos_token,
             self.tokenizer.eos_token,
         ]))
-        seq_tokens = self.tokenizer.encode("ABCDEFGHIKLMNOPQRSTUVWXYZ")
-        struct_tokens = self.tokenizer.encode(''.join(
+                
+        constraint_seq_vocab = self.tokenizer.encode("ABCDEFGHIKLMNOPQRSTUVWXYZ")
+        constraint_struct_vocab = self.tokenizer.encode(''.join(
             [self.structure_template[0].format(token_id=i) for i in range(self.structure_vocab_size)])
         )
         
@@ -206,17 +227,11 @@ class DPLMProcessor(ProcessorMixin):
             'eostruct_token': eostruct_token,
             'bos_token': bos_token,
             'eos_token': eos_token,
-            'seq_tokens': seq_tokens,
-            'struct_tokens': struct_tokens
+            'constraint_seq_vocab': constraint_seq_vocab,
+            'constraint_struct_vocab': constraint_struct_vocab
         }
 
-    def compute_align(self, structure1: OpenfoldProtein, structure2: OpenfoldProtein) -> Tuple[float, float]:
-        # HINT: structure1 is decoded thus requires metadata from structure2
-        structure1.inherit(structure2)
-        return structure1.align_with(structure2, chain_wise=True)
-    
     def compute_acc(self, structure1: str, structure2: str) -> float:
         pred_token = self.tokenizer.encode(structure1, return_tensors='pt')
         true_token = self.tokenizer.encode(structure2, return_tensors='pt')
         return ((pred_token == true_token).sum() / pred_token.size(-1)).item() * 100
-    

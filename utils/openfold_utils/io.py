@@ -3,9 +3,6 @@ References:
 - OpenFold: https://github.com/aqlaboratory/openfold/blob/main/openfold/np/residue_constants.py
 """
 
-
-from openfold.np.protein import to_pdb
-from sympy import residue
 import torch
 import gemmi
 import warnings
@@ -211,7 +208,7 @@ class OpenfoldBackbone:
     @classmethod
     def from_file(cls, path: str | Path):
         if isinstance(path, str): path = Path(path)
-        assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb'], f'Unsupported file type: {path.suffix}'
+        assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb', '.gz'], f'Unsupported file type: {path.suffix}'
         instance = cls()
         gemmi_out = _gemmi_parser(path)
         instance.entry = path.stem
@@ -262,7 +259,7 @@ class OpenfoldProtein:
     @classmethod
     def from_file(cls, path: str | Path):
         if isinstance(path, str): path = Path(path)
-        assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb'], f'Unsupported file type: {path.suffix}'
+        assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb', '.gz'], f'Unsupported file type: {path.suffix}'
         instance = cls()
         gemmi_out = _gemmi_parser(path)
         instance.entry = path.stem
@@ -402,10 +399,6 @@ class OpenfoldProtein:
         # remain coordinate and mask, inherit other metadata, usually called after from_backbone()
         self.entry = other.entry
         # clear variable to release memory immediately
-        del self.residue_aatype
-        del self.residue_index
-        del self.residue_chain_index
-        del self.residue_atom37_bfactor
         self.residue_aatype = other.residue_aatype.clone().to(self.device)
         self.residue_index = other.residue_index.clone().to(self.device)
         self.residue_chain_index = other.residue_chain_index.clone().to(self.device)
@@ -432,6 +425,13 @@ class OpenfoldProtein:
         else:
             result = tmtools.tm_align(src_array, dst_array, str(self), str(other))
             return result.tm_norm_chain1, result.rmsd
+        
+    def distance_matrix(self) -> torch.Tensor:
+        return self.calpha[:, None, :] - self.calpha[None, :, :]
+    
+    @property
+    def num_chain(self) -> int:
+        return torch.unique(self.residue_chain_index).numel()
 
     @property
     def device(self) -> torch.device:

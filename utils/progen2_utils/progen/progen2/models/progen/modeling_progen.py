@@ -663,42 +663,17 @@ class ProGenForCausalLM(ProGenPreTrainedModel):
             loss_fct = CrossEntropyLoss() 
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
             loss = loss.to(hidden_states.dtype)
-            
-            ### plug-in    
-            # preds:       <pad><bos><boseq>xxx<eoseq><bostruct>xxx<eostruct><eos>.
-            # labels: <pad><pad><bos><boseq>xxx<eoseq><bostruct>xxx<eostruct><eos>
-            # mask1:    0    0    0     1   111   0        0    000     0       0
-            # mask2:    0    0    0     0   000   0        1    111     0       0
-            sequence_section_masks: torch.Tensor = kwargs.get('pseq_modality_mask', torch.zeros_like(labels))     # [B, L]
-            structure_section_masks: torch.Tensor = kwargs.get('pstruct_modality_mask', torch.zeros_like(labels)) # [B, L]
-            log_probs = torch.nn.functional.log_softmax(shift_logits, dim=-1)
-            ce = F.nll_loss(
-                input=log_probs.view(-1, log_probs.size(-1)),
-                target=shift_labels.view(-1),
-                ignore_index=-100,
-                reduction='none'
-            ).view_as(shift_labels)
-            
-            if sequence_section_masks.any(): seq_ce = ce[sequence_section_masks[:, :-1]].mean()
-            if structure_section_masks.any(): struct_ce = ce[structure_section_masks[:, :-1]].mean()
         
         if not return_dict:
             output = (lm_logits,) + transformer_outputs[1:]
             return ((loss,) + output) if loss is not None else output
         
-        @dataclass
-        class MultiModalCausalLMOutput(CausalLMOutputWithPast):
-            seq_loss: Optional[torch.Tensor] = None
-            struct_loss: Optional[torch.Tensor] = None
-
-        return MultiModalCausalLMOutput(
+        return CausalLMOutputWithPast(
             loss=loss,
             logits=lm_logits,
             past_key_values=transformer_outputs.past_key_values,
             hidden_states=transformer_outputs.hidden_states,
             attentions=transformer_outputs.attentions,
-            seq_loss=seq_ce,
-            struct_loss=struct_ce
         )
 
     @staticmethod

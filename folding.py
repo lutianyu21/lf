@@ -8,6 +8,7 @@ from datasets import load_dataset
 import torch
 from utils.transformers_utils import DynamicMultimodalLogitsProcessor
 from utils.dplm_utils import DPLMProcessor, dplm_tokenizer
+from utils.dist_utils import DistProcessor, dist_tokenizer
 from utils.openfold_utils.io import OpenfoldProtein
 from transformers.generation.configuration_utils import GenerationConfig
 from tqdm import tqdm
@@ -36,6 +37,7 @@ model.to(device) # type: ignore
 model.eval()
 tokenizer = progen2_merged_tokenizer
 processor = DPLMProcessor(tokenizer, dplm_tokenizer.to(device))
+processor = DistProcessor(tokenizer, dist_tokenizer.to(device))
 
 GENERATION_CONFIG = GenerationConfig(
     use_cache=True,
@@ -55,6 +57,7 @@ results = {
     "rmsd":         [], 
     "tm":           [],
     "rmsd_pdb":     [],
+    "tm_pdb":       [],
     "gt_text":      [],
     "argmax_text":  [],
     "gen_text":     [],
@@ -69,18 +72,26 @@ for k, v in proxy_cases.items():
         results['entry'].append(item['entry'])
         results['path'].append(item['mmcif_path'])
         train_inputs = tokenizer([item['text']], return_tensors='pt', padding=True).to(device)
+        train_inputs['token_type_ids'] = None
         train_labels = train_inputs['input_ids'].clone() # type: ignore
         train_labels[train_labels == tokenizer.pad_token_id] = -100
         loss = model(**train_inputs, labels=train_labels).loss
         results['nll'].append(loss.detach().cpu().item())
         
-        gt_text= item['text'] # <|bos|>~<|eos|>        
-        argmax_text = '<|bos|>' + tokenizer.decode(torch.argmax(model(**train_inputs).logits[:, :-1], dim=-1)[0]) # <|bos|>~<|eos|>
+        # ! important, apply to all decode
+        raw_lengths = item['lengths_struct']
+        print(raw_lengths)
+
+        gt_text= item['text'] # <|bos|>~<|eos|>
+        argmax_text = '<|bos|>' + tokenizer.decode(torch.argmax(model(**train_inputs).logits[:, :-1], dim=-1)[0], raw_lengths=raw_lengths) # <|bos|>~<|eos|>
         results['gt_text'].append(gt_text)
         results['argmax_text'].append(argmax_text)
         
-        eval_inputs: Any = tokenizer(['<|bos|><|boseq|>' + item['protein_text'] + '<|eoseq|><|bostruct|>'], return_tensors='pt', padding=True).to(device) 
-        logits_processor = DynamicMultimodalLogitsProcessor(**processor.constant_helper(), batch_length=[item['lengths_struct']]) # type: ignore
+        eval_inputs: Any = tokenizer(['<|bos|><|boseq|>' + item['protein_text'] + '<|eoseq|><|bostruct|>'], return_tensors='pt', padding=True).to(device)
+        eval_inputs['token_type_ids'] = None
+        constraint_seq_length = [item['lengths_seq']]
+        constraint_struct_length = [item['lengths_struct']]
+        logits_processor = DynamicMultimodalLogitsProcessor(**processor.constant_helper(), constraint_seq_length=constraint_seq_length, constraint_struct_length=constraint_struct_length) # type: ignore
         gen_tokens = model.generate(
             input_ids=eval_inputs["input_ids"],
             token_type_ids=torch.zeros_like(eval_inputs["input_ids"]).to(device), # remove for later ckpt
@@ -88,7 +99,8 @@ for k, v in proxy_cases.items():
             logits_processor=[logits_processor], # type: ignore
             generation_config=GENERATION_CONFIG,
         )
-        gen_text = tokenizer.decode(gen_tokens[0]) # <|bos|>~<|eos|>
+
+        gen_text = tokenizer.decode(gen_tokens[0], raw_lengths=raw_lengths) # <|bos|>~<|eos|>
         results['gen_text'].append(gen_text)
         
         # calculate metrics
@@ -96,16 +108,19 @@ for k, v in proxy_cases.items():
         results['acc'].append(acc)
         
         pdb_entity = OpenfoldProtein.from_file(item['mmcif_path']).to(device)
-        gt_entity: OpenfoldProtein = processor.decode(tokenizer.encode(gt_text))['entity'][0]
+        gt_entity: OpenfoldProtein = processor.decode(tokenizer.encode(gt_text), raw_lengths=raw_lengths)['entity'][0]
         gt_entity.inherit(pdb_entity)
-        gen_entity: OpenfoldProtein = processor.decode(tokenizer.encode(gen_text))['entity'][0]
+        gen_entity: OpenfoldProtein = processor.decode(tokenizer.encode(gen_text), raw_lengths=raw_lengths)['entity'][0]
         gen_entity.inherit(pdb_entity)
         tm, rmsd = gt_entity.align_with(gen_entity, chain_wise=True)
+        
+        gt_entity.align_with(gen_entity, chain_wise=True)
         results['rmsd'].append(rmsd)
         results['tm'].append(tm)
         
         _, rmsd_pdb = pdb_entity.align_with(gen_entity, chain_wise=True)
         results['rmsd_pdb'].append(rmsd_pdb)
+        results['tm_pdb'].append(tm)
         
         # print to terminal as one line, metrics-only
         print(f"===== Group =====: {k}", f"===== Entry =====: {item['entry']}", f"===== NLL loss =====: {loss.detach().cpu().item()}", f"===== ACC ===== {acc}", f"===== RMSD ===== {rmsd}", f"===== TM ===== {tm}", f"===== RMSD_PDB ===== {rmsd_pdb}", sep='\n')

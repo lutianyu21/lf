@@ -18,3 +18,6 @@
 
 # slink
 data/rcsb_mmcif
+data/swissprot_cif_v4
+
+/cache
