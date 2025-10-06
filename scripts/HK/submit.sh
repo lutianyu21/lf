@@ -83,6 +83,11 @@ $PIP show openfold >/dev/null 2>&1 || $PIP install \
     --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
     -e /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm/vendor/openfold
 
+whoami
+id
+ls /AIRvePFS/ai4science/users/tianyu/lf/data
+ls -l /AIRvePFS/ai4science/users/tianyu/lf/data/rcsb_mmcif/7k68.cif
+
 echo "=== Runnig task ==="
 cd /AIRvePFS/ai4science/users/tianyu/lf
 conda run -n dplm torchrun \
