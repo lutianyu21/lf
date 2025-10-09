@@ -1,2 +1,2 @@
-from .tokenizers import DistTokenizer, dist_tokenizer
-from .dist_processor import DistProcessor
+from .model import DiscreteTokenizer
+from .structure_diffusion.model import StructurePredictionModel

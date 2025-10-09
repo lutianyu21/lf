@@ -9,7 +9,7 @@ import warnings
 import numpy as np
 import tmtools
 from pathlib import Path
-from typing import Any, Tuple, Union, Optional, Union, Dict
+from typing import Any, List, Tuple, Union, Optional, Union, Dict
 
 
 __all__ = ['OpenfoldBackbone', 'OpenfoldProtein']
@@ -121,9 +121,9 @@ gemmi_checker = {
 # TODO if necessary, implement biopython, biotite parser
 def _gemmi_parser(
     p: Path,
-    protocol: Dict[str, bool] = gemmi_default_protocol
+    protocol: Dict[str, bool] = gemmi_default_protocol,
+    specify_chains: List[str] | None = None, 
 ) -> Any:
-    
     structure = gemmi.read_structure(str(p))
     if len(structure) > 1:
         warnings.warn(f'Multiple conformation({len(structure)}) detected, taking the first conformation only ...')
@@ -132,6 +132,9 @@ def _gemmi_parser(
     # DEV: introducing symid, asymid feature & multi-chain cropping
     chain2feature: Dict[str, Dict[str, torch.Tensor]] = {}
     for chain in main_model:
+        if specify_chains is not None and chain.name not in specify_chains: 
+            continue
+        
         feature_template = {
             'residue_atom37_coord': [],         # [L, 37, 3]
             'residue_atom37_mask':  [],         # [L, 37]
@@ -207,10 +210,19 @@ class OpenfoldBackbone:
     
     @classmethod
     def from_file(cls, path: str | Path):
+        # FEAT: support .pdb file and .cif file
+        # FEAT: now we can support format like 7dz2.C.cif, 7dz2_C.cif to sepcify chain
         if isinstance(path, str): path = Path(path)
         assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb', '.gz'], f'Unsupported file type: {path.suffix}'
+        specify_chains: List[str] | None = path.stem.replace('_', '.').split('.')
+        if len(specify_chains) > 1:
+            pure_name, specify_chains = specify_chains[0], specify_chains[1:]
+            path = path.parent / (pure_name + path.suffix)
+        else:
+            specify_chains = None
+        
         instance = cls()
-        gemmi_out = _gemmi_parser(path)
+        gemmi_out = _gemmi_parser(path, specify_chains=specify_chains)
         instance.entry = path.stem
         instance.residue_atom37_coord = gemmi_out['residue_atom37_coord']
         instance.residue_atom37_mask = gemmi_out['residue_atom37_mask']
@@ -260,8 +272,15 @@ class OpenfoldProtein:
     def from_file(cls, path: str | Path):
         if isinstance(path, str): path = Path(path)
         assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb', '.gz'], f'Unsupported file type: {path.suffix}'
+        specify_chains: List[str] | None = path.stem.replace('_', '.').split('.')
+        if len(specify_chains) > 1:
+            pure_name, specify_chains = specify_chains[0], specify_chains[1:]
+            path = path.parent / (pure_name + path.suffix)
+        else:
+            specify_chains = None    
+        
         instance = cls()
-        gemmi_out = _gemmi_parser(path)
+        gemmi_out = _gemmi_parser(path, specify_chains=specify_chains)
         instance.entry = path.stem
         instance.residue_atom37_coord   = gemmi_out['residue_atom37_coord']
         instance.residue_atom37_mask    = gemmi_out['residue_atom37_mask']
@@ -407,7 +426,7 @@ class OpenfoldProtein:
     def align_with(self, other: 'OpenfoldProtein', chain_wise: bool = False) -> Tuple[float, float]:
         assert len(self) == len(other), 'Length mismatch.'
         src_array = self.calpha.cpu().numpy()
-        dst_array = other.cbeta.cpu().numpy()
+        dst_array = other.calpha.cpu().numpy()
         # if chain-wise, split according to chain_index and calculate separately
         if chain_wise:
             assert torch.equal(self.residue_chain_index, other.residue_chain_index), 'Chain index mismatch. Call inherit() first ?'

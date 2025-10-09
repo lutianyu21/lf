@@ -5,9 +5,22 @@ import pandas as pd
 import os
 import torch
 
+from tokenizers import Tokenizer
+
 from .protein_processor import ProteinProcessor
 from .protein_tokenizer import DPLMProteinTokenizer, dplm_protein_tokenizer
-from .text_tokenizer import lf_tokenizer
+from .text_tokenizer import TextTokenizer
+
+
+protein_tokenizer = dplm_protein_tokenizer
+text_tokenizer = TextTokenizer(
+    tokenizer_object=Tokenizer.from_file(str(Path(__file__).parent.parent/'progen2_utils/progen/progen2/tokenizer.json')),
+    pad_token='<|pad|>',
+    bos_token='<|bos|>',
+    eos_token='<|eos|>',
+    padding_side='left',
+    struct_vsz=protein_tokenizer.vsz,
+)
 
 # ---- GPU Worker ----
 @ray.remote(num_gpus=1)
@@ -15,13 +28,12 @@ class GPUWorker:
     def __init__(self):
         from .protein_processor import ProteinProcessor
         from .protein_tokenizer import dplm_protein_tokenizer
-        from .text_tokenizer import lf_tokenizer
         gpu_ids = ray.get_gpu_ids()
         if not gpu_ids:
             raise RuntimeError("No GPU assigned to this actor")
         self.device = torch.device(f"cuda:{gpu_ids[0]}")
         self.processor = ProteinProcessor(
-            tokenizer=lf_tokenizer,
+            tokenizer=text_tokenizer,
             struct_tokenizer=dplm_protein_tokenizer,
         ).to(self.device)
 

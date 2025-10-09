@@ -11,7 +11,7 @@ from torch.nn import Module, ModuleList
 import torch.nn.functional as F
 import torch.distributed as dist
 
-from vector_quantize_pytorch.sim_vq import SimVQ, pack_one
+from .sim_vq import SimVQ, pack_one
 
 from einx import get_at
 from einops import rearrange, repeat, reduce, pack, unpack

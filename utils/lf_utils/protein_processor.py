@@ -32,8 +32,9 @@ class ProteinProcessor(ProcessorMixin):
     ):
         super().__init__(tokenizer)
         self.tokenizer = tokenizer
-        self.struct_vsz = tokenizer.struct_vsz
+        # HINT tokenizer's vsz could be larger than actual vsz
         self.struct_tokenizer = struct_tokenizer
+        self.struct_vsz = struct_tokenizer.vsz
         self.struct_regex = tokenizer.struct_regex
         self.struct_template = tokenizer.struct_template
         self.constant = self.constant_helper()
@@ -56,7 +57,7 @@ class ProteinProcessor(ProcessorMixin):
         seq_text: List[str] = seq_input
         struct_text: List[str] = []
         batch_token_ids: torch.Tensor = right_out['batch_token_ids']           # [B, L_seq]
-        batch_padding_mask: torch.Tensor = right_out['batch_padding_mask']     # [B, L_seq]
+        batch_padding_mask: torch.Tensor = (batch_token_ids == -100).long()    # [B, L_seq]
         for token_ids, padding_mask in zip(batch_token_ids, batch_padding_mask):
             token_ids = token_ids[~padding_mask.bool()]
             struct_text.append("".join([self.struct_template.format(token_id=i) for i in token_ids]))
@@ -169,7 +170,7 @@ class ProteinProcessor(ProcessorMixin):
             pdb_name, split = row["pdb_name"], row["split"]
             if split == "afdb_swissprot":
                 protein_path = Path(f"/AIRvePFS/ai4science/users/tianyu/lf/data/swissprot_cif_v4/{pdb_name}.cif.gz")
-            elif split == "pdb":
+            elif split == "pdb" or split == "cameo2022":
                 protein_path = Path(f"/AIRvePFS/ai4science/users/tianyu/lf/data/rcsb_mmcif/{pdb_name}.cif")
             else:
                 raise ValueError(f"Unknown split {split}")
@@ -178,8 +179,8 @@ class ProteinProcessor(ProcessorMixin):
         # batch tokenizeation (GPU)
         proteins = [p.to(self.struct_tokenizer.device) for p in proteins]
         out =  self.struct_tokenizer(proteins)
-        batch_token_ids = out['batch_token_ids']            # [B, L]
-        batch_padding_mask = out['batch_padding_mask']      # [B, L]
+        batch_token_ids = out['batch_token_ids'] # [B, L]
+        batch_padding_mask = (batch_token_ids == -100).long()
         for row, protein, token_ids, padding_mask in zip(batch, proteins, batch_token_ids, batch_padding_mask):
             seq_text = str(protein)
             seq_length = len(protein)
@@ -200,7 +201,7 @@ class ProteinProcessor(ProcessorMixin):
             results.append(row)
         return results
     
-    def to(self, device: str | torch.device) -> "ProteinProcessor":
+    def to(self, device: str | torch.device):
         self.struct_tokenizer.to(device)
         return self
     

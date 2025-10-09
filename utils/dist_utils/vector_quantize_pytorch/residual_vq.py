@@ -10,7 +10,7 @@ from torch import nn, Tensor
 from torch.nn import Module, ModuleList
 import torch.nn.functional as F
 import torch.distributed as dist
-from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
+from .vector_quantize_pytorch import VectorQuantize
 
 from einops import rearrange, repeat, reduce, pack, unpack
 

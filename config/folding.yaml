@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - dataset: dplm_pdb
+  - dataset: dataset1_dplm
   - lm: progen2
   - trainer: progen2
 

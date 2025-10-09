@@ -2,16 +2,20 @@ import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Union, cast
 from byprot.tasks.lm import dplm
-from gemmi import Op
 from omegaconf import OmegaConf
+import math
+from sympy import residue
 import torch
 from torch import nn
+import torch.nn.functional as F
+import numpy as np
 
-from ..openfold_utils.io import OpenfoldBackbone, OpenfoldProtein
+from ..openfold_utils.io import OpenfoldBackbone, OpenfoldProtein, atom_order
 
 __all__ = [
     'ProteinTokenizer',
     'DPLMProteinTokenizer', 'dplm_protein_tokenizer',
+    'DistMatrixTokenizer', 'dist_protein_tokenizer',
 ]
 
 
@@ -64,6 +68,7 @@ class DPLMProteinTokenizer(ProteinTokenizer):
             tokenizer = tokenizer.requires_grad_(False)
             tokenizer = tokenizer.train(not eval_mode)
         self.tokenizer = tokenizer
+        self.config = config
     
     def __call__(self, batch_proteins: List[OpenfoldProtein]) -> Dict[str, torch.Tensor]:
         # support batch encode, thus batch_padding_mask is returned
@@ -96,31 +101,29 @@ class DPLMProteinTokenizer(ProteinTokenizer):
         ).to(batch_residue_mask.dtype) # [B, L]
         
         # core implementation
-        output = self.tokenizer.tokenize(
+        output: torch.Tensor = self.tokenizer.tokenize(
             atom_positions=batch_residue_atom37_coord,  # [B, L, 37, 3]
             res_mask=batch_residue_mask,                # [B, L]
             seq_length=batch_lengths                    # [B]
         )
         
+        # set right-padding tokens to -100
+        output = output.masked_fill(batch_padding_mask.bool(), -100)
+        
         # convert to left-padding
         return {
             'batch_token_ids': output,                  # [B, L]
-            'batch_padding_mask': batch_padding_mask,   # [B, L]
             'batch_residue_mask': batch_residue_mask    # [B, L]
         }
         
     def batch_decode(self, batch_token_ids: torch.Tensor, **kwargs) -> List[OpenfoldProtein]:
-        # support batch decode, thus padding_mask is expected(in kwargs)
-        if batch_token_ids.size(0) > 1:
-            assert 'batch_lengths' in kwargs, "Expect 'batch_lengths' in kwargs for batch decode."
-        batch_lengths = kwargs.get(
-            'batch_lengths',
-            torch.tensor([batch_token_ids.size(1)], device=batch_token_ids.device)
-        )
+        # before calling, -100 should be set for right-padding tokens
+        # construct batch_length from batch_token_ids(-100 is set)
         
+        batch_length = (batch_token_ids != -100).sum(dim=1) # [B]
         if 'batch_residue_mask' not in kwargs:
-            warnings.warn("Expect 'batch_residue_mask' in kwargs for batch decode. Assuming no missing residues.")
-        
+            warnings.warn("Expect 'batch_residue_mask' in kwargs for decoding. Assuming no missing residues.")
+            
         # NOTE while decoding, we ignore paddings by batch_residue_mask
         # and each sequence is decoded to a backbone structure(w/ missing resiudes)
         output = self.tokenizer.detokenize(
@@ -129,7 +132,7 @@ class DPLMProteinTokenizer(ProteinTokenizer):
         )
         
         batch_proteins = []
-        for i, l in enumerate(batch_lengths):
+        for i, l in enumerate(batch_length):
             residue_atom37_coord = output['atom37_positions'][i, :l, :] # [l, 37, 3]
             residue_atom37_mask = output['atom37_mask'][i, :l, :]       # [l, 37]
             if kwargs.get('batch_residue_mask') is not None: # inherit missing residues
@@ -151,11 +154,11 @@ class DPLMProteinTokenizer(ProteinTokenizer):
         # batch_lengths is not necessary for single decode
         if 'residue_mask' not in kwargs:
             assert 'ref' in kwargs
-            residue_mask = self([kwargs.pop('ref')])['batch_residue_mask'][0]
-            kwargs['residue_mask'] = residue_mask
+            ref_residue_mask = self([kwargs.pop('ref')])['batch_residue_mask'][0]
+            kwargs['residue_mask'] = ref_residue_mask
             # this 'leakage' function is to conveniently evaluate structure prediction
         
-        residue_mask = kwargs.pop('residue_mask', None)
+        residue_mask: torch.Tensor = kwargs.pop('residue_mask', None)
         return self.batch_decode(
             batch_token_ids=token_ids.unsqueeze(0),
             batch_residue_mask=residue_mask.unsqueeze(0) if residue_mask is not None else None
@@ -167,7 +170,7 @@ class DPLMProteinTokenizer(ProteinTokenizer):
     
     @property
     def vsz(self) -> int:
-        raise NotImplementedError()
+        return self.config.codebook_config.num_codes
 
 dplm_protein_tokenizer_path = Path(__file__).parent.parent/'dplm_utils/checkpoints/struct_tokenizer'
 torch.hub.set_dir(dplm_protein_tokenizer_path)
@@ -175,4 +178,209 @@ dplm_protein_tokenizer = DPLMProteinTokenizer(
     config_path=dplm_protein_tokenizer_path/'config.yaml',
     ckpt_path=dplm_protein_tokenizer_path/'dplm2_struct_tokenizer.ckpt',
     eval_mode=True
+)
+
+
+
+class DistMatrixTokenizer(ProteinTokenizer):
+    def __init__(
+        self,
+        tokenizer_ckpt_path: str | Path,
+        structure_ckpt_path: str | Path,
+        map_location: Union[str, torch.device] = "cpu",
+    ) -> None:
+        from ..dist_utils import DiscreteTokenizer, StructurePredictionModel
+        super().__init__()
+        self.tokenizer_ckpt_path = Path(tokenizer_ckpt_path).resolve()
+        self.structure_ckpt_path = Path(structure_ckpt_path).resolve()
+        self.map_location = map_location
+
+        print(f"Loading tokenizer checkpoint from: {self.tokenizer_ckpt_path}")
+        tokenizer_checkpoint = torch.load(self.tokenizer_ckpt_path, map_location=map_location)
+        self.config = tokenizer_checkpoint["hyper_parameters"]["config"]
+
+        self.model = DiscreteTokenizer(
+            in_channels=self.config.model.in_channels,
+            embed_dim=self.config.model.embed_dim,
+            patch_size=self.config.model.patch_size,
+            num_layers=self.config.model.num_layers,
+            num_heads=self.config.model.num_heads,
+            mlp_ratio=self.config.model.mlp_ratio,
+            dropout=self.config.model.dropout,
+            z_channels=self.config.model.z_channels,
+            double_z=self.config.model.double_z,
+            quantizer_type=self.config.quantizer._target_,
+            quantizer_kwargs=dict(self.config.quantizer.params),
+        )
+
+        tokenizer_state_prefix = "model."
+        tokenizer_state = {
+            k[len(tokenizer_state_prefix) :]: v
+            for k, v in tokenizer_checkpoint["state_dict"].items()
+            if k.startswith(tokenizer_state_prefix)
+        }
+        self.model.load_state_dict(tokenizer_state)
+
+        print(f"Loading structure checkpoint from: {self.structure_ckpt_path}")
+        structure_checkpoint = torch.load(self.structure_ckpt_path, map_location=map_location)
+        self.structure_config = structure_checkpoint["hyper_parameters"]["config"]
+
+        self.structure_model = StructurePredictionModel(
+            in_channels=self.structure_config.model.in_channels,
+            embed_dim=self.structure_config.model.embed_dim,
+            num_layers=self.structure_config.model.num_layers,
+            num_heads=self.structure_config.model.num_heads,
+            mlp_ratio=self.structure_config.model.mlp_ratio,
+            dropout=self.structure_config.model.dropout,
+            output_dim=self.structure_config.model.output_dim,
+        )
+
+        structure_state_prefix = "model."
+        structure_state = {
+            k[len(structure_state_prefix) :]: v
+            for k, v in structure_checkpoint["state_dict"].items()
+            if k.startswith(structure_state_prefix)
+        }
+        self.structure_model.load_state_dict(structure_state)
+
+        self.std_value = float(self.config.data.std_value)
+        self.std_data = float(self.structure_config.data.std_data)
+
+        self.model.eval()
+        self.structure_model.eval()
+
+    @torch.no_grad()
+    def __call__(self, batch_proteins: list[OpenfoldProtein]) -> dict[str, torch.Tensor]:
+        # support batch encode, thus padding_mask is returned
+        indices_list = []
+        for protein in batch_proteins:
+            indices = self.encode(protein)
+            indices_list.append(indices)
+        
+        batch_indices = torch.nn.utils.rnn.pad_sequence(
+            indices_list, batch_first=True, padding_value=-100
+        )
+        padding_mask = (batch_indices == -100).long()
+        return {
+            "batch_token_ids": batch_indices,
+        }
+
+    @torch.no_grad()
+    def batch_decode(self, batch_token_ids: torch.Tensor, **kwargs) -> list[OpenfoldProtein]:
+        warnings.warn("`batch_decode` is not fully parallel, just call `decode`.")
+        # before calling, -100 should be set for right-padding tokens
+        # construct batch_length from batch_token_ids(-100 is set)
+        
+        batch_length = (batch_token_ids != -100).sum(dim=1) # [B]
+        if 'batch_protein_length' not in kwargs:
+            warnings.warn("Expect 'batch_protein_length' in kwargs for decoding. Assuming no patch-padding.")
+            raise NotImplementedError()
+        
+        batch_protein_lengths = kwargs.get('batch_protein_length', None)
+        if batch_protein_lengths is None:
+            raise ValueError("batch_lengths and protein_lengths must be provided for batch decoding.")
+        batch_size = batch_token_ids.shape[0]
+        decoded_proteins = []
+        for i in range(batch_size):
+            token_ids = batch_token_ids[i][:batch_length[i]]
+            protein_length = batch_protein_lengths[i]
+            protein = self.decode(token_ids, protein_length=protein_length)
+            decoded_proteins.append(protein)
+        return decoded_proteins
+
+    @torch.no_grad()
+    def encode(self, protein: OpenfoldProtein) -> torch.Tensor:
+        patch_size = self.config.model.patch_size
+        ca_index = atom_order["CA"]
+
+        ca_coords = protein.residue_atom37_coord[:, ca_index, :].to(self.device, dtype=torch.float32)
+
+        distance_tensor = (ca_coords[:, None, :] - ca_coords[None, :, :]) / self.std_value
+        seq_len = distance_tensor.size(0)
+        padded_len = math.ceil(seq_len / patch_size) * patch_size
+
+        if padded_len != seq_len:
+            pad_amount = padded_len - seq_len
+            distance_tensor = F.pad(distance_tensor, (0, 0, 0, pad_amount, 0, pad_amount))
+
+        model_input = distance_tensor.unsqueeze(0)
+        quantized, indices, _ = self.model.encode(model_input)
+        indices = indices.reshape(indices.shape[0], -1)
+        return indices.squeeze(0).contiguous()
+
+    @torch.no_grad()
+    def decode(self, token_ids: torch.Tensor, **kwargs) -> OpenfoldProtein:
+        # HINT: for patch-based methods, there are both patch-padding and batch_padding
+        # thus we need to know the original protein length for correct decoding
+        
+        if 'protein_length' not in kwargs:
+            # PLUGIN: this 'leakage' function is to conveniently evaluate structure prediction
+            assert 'ref' in kwargs, "Expect 'protein_length' or 'ref' in kwargs for decoding."
+            kwargs['protein_length'] = len(kwargs.pop('ref'))
+        
+        protein_length = kwargs.get("protein_length")
+        if protein_length is None:
+            raise ValueError("protein_length must be provided for decoding.")
+        patch_size = self.config.model.patch_size
+        z_channels = self.config.model.z_channels
+
+        token_ids = token_ids.to(self.device)
+        if token_ids.dim() == 1:
+            token_ids = token_ids.unsqueeze(0)
+        token_ids = token_ids.to(torch.int32)
+
+        padded_len = math.ceil(protein_length / patch_size) * patch_size
+        h_patches = padded_len // patch_size
+        w_patches = h_patches
+        expected_tokens = h_patches * w_patches
+        if token_ids.shape[-1] != expected_tokens:
+            raise ValueError(
+                f"Expected {expected_tokens} tokens for protein length {protein_length}, "
+                f"but received {token_ids.shape[-1]} tokens."
+            )
+
+        quantizer = self.model.quantizer
+        codes = quantizer.indices_to_codes(token_ids)
+        codes = codes.to(self.device, dtype=torch.float32)
+
+        batch_size = codes.shape[0]
+        quantized = codes.view(batch_size, h_patches, w_patches, z_channels)
+        quantized = quantized.permute(0, 3, 1, 2).contiguous()
+
+        reconstructed = self.model.decode(quantized)
+        trimmed_distance = reconstructed[:, : protein_length, : protein_length, :]
+
+        distance_matrix = trimmed_distance.squeeze(0)
+        predicted_coords = self.structure_model(distance_matrix)
+        predicted_coords = predicted_coords * self.std_data
+
+        residue_atom37_coord = torch.zeros((protein_length, 37, 3), device=self.device)
+        residue_atom37_mask = torch.zeros((protein_length, 37), device=self.device)
+        ca_index = atom_order["CA"]
+        residue_atom37_coord[:, ca_index, :] = predicted_coords
+        residue_atom37_mask[:, ca_index] = 1.0
+        backbone = OpenfoldBackbone.from_dict(
+            dict(
+                residue_atom37_coord=residue_atom37_coord,
+                residue_atom37_mask=residue_atom37_mask,
+            )
+        )
+        protein = OpenfoldProtein.from_backbone(backbone)
+        return protein
+    
+    @property
+    def device(self) -> torch.device:
+        return next(self.model.parameters()).device
+
+    @property
+    def vsz(self) -> int:
+        quantizer = self.model.quantizer
+        return quantizer.codebook_size
+
+dist_protein_tokenizer_ckpt_path = "/AIRvePFS/ai4science/users/zhangzhe/discrete_tokenizer/ckpt/fsq-epoch=1676-val_loss=0.0063.ckpt"
+dist_structure_ckpt_path = "/AIRvePFS/ai4science/users/zhangzhe/discrete_tokenizer/ckpt/structure-epoch=00-val_loss=0.0003.ckpt"
+dist_protein_tokenizer = DistMatrixTokenizer(
+    tokenizer_ckpt_path=dist_protein_tokenizer_ckpt_path,
+    structure_ckpt_path=dist_structure_ckpt_path,
+    map_location="cpu",
 )

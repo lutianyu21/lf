@@ -1,26 +1,13 @@
-from einops import rearrange
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
 from typing import Dict, Any, Optional, Tuple
-
-import sys
-sys.path.append('/AIRvePFS/ai4science/users/tianyu/lf/utils/dist_utils')
-
-from utils.dist_utils.vector_quantize_pytorch import (
+from .vector_quantize_pytorch import (
     VectorQuantize, FSQ, LFQ, SimVQ, 
     ResidualVQ, ResidualFSQ, ResidualLFQ, ResidualSimVQ
 )
 
-def exists(v):
-    return v is not None
-
-def default(*args):
-    for arg in args:
-        if exists(arg):
-            return arg
-    return None
 
 class MultiHeadSelfAttention(nn.Module):
     """Multi-head self-attention module."""
@@ -282,7 +269,7 @@ class DiscreteTokenizer(nn.Module):
         z_channels: int = 64,
         double_z: bool = False,
         quantizer_type: str = 'vq',
-        quantizer_kwargs: Optional[Dict[str, Any]] = None,
+        quantizer_kwargs: Optional[Dict[str, Any]] = None
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -381,6 +368,11 @@ class DiscreteTokenizer(nn.Module):
         
         return reconstructed, indices, commit_loss
     
+    def indices_decode(self, indices):
+        quantized = self.quantizer.indices_to_codes(indices)
+        reconstructed = self.decode(quantized)
+        return reconstructed
+    
     def get_codebook_usage(self, indices):
         if hasattr(self.quantizer, 'codebook_size'):
             codebook_size = self.quantizer.codebook_size
@@ -391,4 +383,3 @@ class DiscreteTokenizer(nn.Module):
         
         unique_codes = indices.unique().numel()
         return unique_codes / codebook_size
-    

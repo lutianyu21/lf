@@ -1,10 +1,8 @@
-from tokenizers import Tokenizer
-from pathlib import Path
 from transformers.tokenization_utils_fast import PreTrainedTokenizerFast
 from typing import List, cast
 
 
-__all__ = ['TextTokenizer', 'lf_tokenizer']
+__all__ = ['TextTokenizer']
 
 class TextTokenizer(PreTrainedTokenizerFast):
     
@@ -54,12 +52,7 @@ class TextTokenizer(PreTrainedTokenizerFast):
     @property
     def struct_vocab_ids(self) -> List[int]:
         return self.encode(''.join([self.struct_template.format(token_id=i) for i in range(self.struct_vsz)]))
-
-lf_tokenizer = TextTokenizer(
-    tokenizer_object=Tokenizer.from_file(str(Path(__file__).parent.parent/'progen2_utils/progen/progen2/tokenizer.json')),
-    pad_token='<|pad|>',
-    bos_token='<|bos|>',
-    eos_token='<|eos|>',
-    padding_side='left',
-    struct_vsz=8300,
-)
+    
+    @property
+    def vocab_size(self) -> int:
+        return len(self.get_vocab())

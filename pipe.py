@@ -1,18 +1,9 @@
-from multiprocessing import reduction
-import token
+from cgitb import text
 from typing import Any, Dict, Optional, List, Text, Tuple, cast
 import hydra
-from openfold.np.protein import Protein
-import torch
 import os
 import pandas as pd
 import wandb
-import torch
-import torch.utils
-import torch.utils.data
-import torch.distributed as dist
-from torch.nn import CrossEntropyLoss
-import numpy as np
 from pathlib import Path
 from omegaconf import OmegaConf, DictConfig
 
@@ -22,14 +13,23 @@ from transformers import Trainer, TrainingArguments, TrainerCallback, is_dataset
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers import PreTrainedModel
 from transformers import EvalPrediction
+from tokenizers import Tokenizer
+
+import numpy as np
+import torch
+import torch.utils
+import torch.utils.data
+import torch.distributed as dist
+from torch.nn import CrossEntropyLoss
 
 from utils.dplm_utils.dplm import train
+from utils.lf_utils.protein_tokenizer import dist_protein_tokenizer
 from utils.openfold_utils.io import OpenfoldProtein
 from utils.progen2_utils import ProGenForCausalLM, ProGenConfig
 
 from utils.lf_utils import (
-    lf_tokenizer,
     dplm_protein_tokenizer,
+    TextTokenizer,
     ProteinProcessor, 
     SortishApproxBatchDataloader,
     TextCollator,
@@ -181,7 +181,6 @@ class LFTrainer(Trainer):
         self.processor.to(device)
 
         labels = inputs["labels"]
-        # exposure evaluation (training pipeline)
         outputs = model(
             input_ids=inputs['input_ids'],
             attention_mask=inputs['attention_mask'],
@@ -298,14 +297,37 @@ def main(config: DictConfig):
     if (rank := int(os.environ.get("RANK", 0))) == 0:
         wandb.init(project="LLMFolding", name=config.name, config=OmegaConf.to_container(config, resolve=True)) # type: ignore
     
-    # HINT: ProGen2 didn't implement `get_output_embeddings()` and therefore 
+    # exp1: dplm tokenizer + progen2 lm + dplm dataset
+    # exp2: dist tokenizer + progen2 lm + dist dataset
+    protein_tokenizer = {
+        "dist": dist_protein_tokenizer,
+        "dplm": dplm_protein_tokenizer,
+    }[str(config_dataset.hf_data_type).split('_')[-1]]
+    
+    text_tokenizer = TextTokenizer(
+        tokenizer_object=Tokenizer.from_file(str(Path(__file__).parent/'utils/progen2_utils/progen/progen2/tokenizer.json')),
+        pad_token='<|pad|>',
+        bos_token='<|bos|>',
+        eos_token='<|eos|>',
+        padding_side='left',
+        struct_vsz=protein_tokenizer.vsz,
+    )
+    processor = ProteinProcessor(
+        tokenizer=text_tokenizer,
+        struct_tokenizer=protein_tokenizer
+    )
+
+    # HINT: ProGen2 didn't implement `get_output_embeddings()` and therefore
     # `model.tie_weights()` inside/outside `from_pretrained()` is actually dummy!
     hf_config: ProGenConfig = ProGenConfig.from_pretrained(Path(config_lm.hf_checkpoint_dir))                                      # type: ignore
-    # hf_model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(Path(config_lm.pretrained_dir), torch_dtype=torch.float32) # type: ignore
-    hf_model: ProGenForCausalLM = ProGenForCausalLM(hf_config)
-    # hf_model.tie_weights() # ensurement
-    hf_model.resize_token_embeddings(config_lm.new_vsz)
-    hf_model.train()
+    if config_lm.pretrained_dir is None:
+        hf_model: ProGenForCausalLM = ProGenForCausalLM(hf_config)
+        # hf_model.tie_weights() # ensurement
+        hf_model.resize_token_embeddings(text_tokenizer.vocab_size)
+    else:
+        hf_model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(
+            Path(config_lm.pretrained_dir), torch_dtype=torch.float32
+        ) # type: ignore
     
     # monomeric dataset
     features = Features({
@@ -329,11 +351,11 @@ def main(config: DictConfig):
     
     ds = load_dataset("json", data_files=config_dataset.hf_data_dir, split="train", features=features) # type: ignore
     ds = ds.filter(lambda x: x['total_length'] <= 2048)         # type: ignore
-    split = ds.train_test_split(test_size=100, seed=2025)      # type: ignore
+    split = ds.train_test_split(test_size=2, seed=2025)      # type: ignore
     train_dataset, eval_dataset = split['train'], split['test']
     # here we construct a hybrid evaluation dataset
     # including 100 items from split['test] and 100 items from split['train']
-    subsplit = train_dataset.train_test_split(test_size=100, seed=2025) # type: ignore
+    subsplit = train_dataset.train_test_split(test_size=2, seed=2025) # type: ignore
     overfit_dataset = subsplit['test']
     
     # however we need to add a new field 'dev' to distinguish them
@@ -344,9 +366,25 @@ def main(config: DictConfig):
     eval_dataset = datasets.concatenate_datasets([overfit_dataset, eval_dataset]) # type: ignore
     print(f"train: {len(train_dataset)} items, eval: {len(eval_dataset)} items")
     
-    # hf-style trainer
+    # hf-style training process
+    hf_model.train()
     training_args = TrainingArguments(**config_trainer, remove_unused_columns=False)
-    processor = ProteinProcessor(tokenizer=lf_tokenizer, struct_tokenizer=dplm_protein_tokenizer)
+    # trainer = LFTrainer(
+    #     processor=processor,
+    #     model=hf_model,
+    #     train_collator=TextCollator(processor, eval_mode=False),
+    #     eval_collator=TextCollator(processor, eval_mode=True),
+    #     args=training_args,
+    #     train_dataset=train_dataset,
+    #     eval_dataset=eval_dataset,
+    #     compute_metrics=lf_metrics,
+    # )
+    # trainer.train()
+    
+    # hf-style benchmarking process
+    cameo_dataset = load_dataset("json", data_files="/AIRvePFS/ai4science/users/tianyu/lf/data/cameo2022_dplm.jsonl", split="train", features=features) # type: ignore
+    cameo_dataset = cameo_dataset.add_column("dev", [2] * len(cameo_dataset)) # type: ignore
+    hf_model.eval()
     trainer = LFTrainer(
         processor=processor,
         model=hf_model,
@@ -354,10 +392,12 @@ def main(config: DictConfig):
         eval_collator=TextCollator(processor, eval_mode=True),
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        eval_dataset=cameo_dataset,
         compute_metrics=lf_metrics,
     )
-    trainer.train()
+    trainer.evaluate()
+    
+
 
 if __name__ == "__main__":
     main()

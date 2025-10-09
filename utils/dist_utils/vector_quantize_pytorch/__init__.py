@@ -6,8 +6,7 @@ from .lookup_free_quantization import LFQ
 from .residual_lfq import ResidualLFQ, GroupedResidualLFQ
 from .residual_fsq import ResidualFSQ, GroupedResidualFSQ
 from .latent_quantization import LatentQuantize
-
 from .sim_vq import SimVQ
 from .residual_sim_vq import ResidualSimVQ
-
 from .utils import Sequential
+

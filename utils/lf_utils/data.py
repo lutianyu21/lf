@@ -8,6 +8,8 @@ import torch.distributed as dist
 import math
 import numpy as np
 
+from utils.dplm_utils.dplm import train
+
 from .protein_processor import ProteinProcessor
 
 __all__ = [
@@ -35,8 +37,9 @@ class TextCollator:
             return_tensors='pt',
             padding=True
         ) # type: ignore
-       
+        
         labels = train_feature['input_ids'].clone()
+        labels = torch.where(train_feature['attention_mask'].bool(), labels, -100)
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
         seq_length = torch.tensor(list(map(lambda x: x["seq_length"], batch)))
         struct_length = torch.tensor(list(map(lambda x: x["struct_length"], batch)))

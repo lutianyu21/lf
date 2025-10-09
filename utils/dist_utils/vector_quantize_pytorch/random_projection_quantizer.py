@@ -1,7 +1,7 @@
 import torch
 from torch import nn, einsum
 import torch.nn.functional as F
-from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
+from .vector_quantize_pytorch import VectorQuantize
 
 from einops import rearrange, repeat, pack, unpack
 

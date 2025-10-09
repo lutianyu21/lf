@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.amp import autocast
 import torch.distributed as dist
 
-from vector_quantize_pytorch.lookup_free_quantization import LFQ
+from .lookup_free_quantization import LFQ
 
 from einops import rearrange, repeat, reduce, pack, unpack
 

@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from einx import get_at
 from einops import rearrange, pack, unpack
 
-from vector_quantize_pytorch.vector_quantize_pytorch import rotate_to
+from .vector_quantize_pytorch import rotate_to
 
 # helper functions
 
