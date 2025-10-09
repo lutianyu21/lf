@@ -2,7 +2,7 @@ from .protein_processor import ProteinProcessor
 from .protein_tokenizer import (
     ProteinTokenizer, 
     DPLMProteinTokenizer, dplm_protein_tokenizer,
-    DistMatrixTokenizer, dist_protein_tokenizer,
+    DistMatrixTokenizer,
 )
 from .text_tokenizer import TextTokenizer
 from .ray import build_dataset
