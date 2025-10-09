@@ -318,13 +318,13 @@ def main(config: DictConfig):
     # HINT: ProGen2 didn't implement `get_output_embeddings()` and therefore
     # `model.tie_weights()` inside/outside `from_pretrained()` is actually dummy!
     hf_config: ProGenConfig = ProGenConfig.from_pretrained(Path(config_lm.hf_checkpoint_dir))                                      # type: ignore
-    if config_lm.pretrained_dir is None:
+    if config_lm.hf_checkpoint_dir is None:
         hf_model: ProGenForCausalLM = ProGenForCausalLM(hf_config)
         # hf_model.tie_weights() # ensurement
         hf_model.resize_token_embeddings(text_tokenizer.vocab_size)
     else:
         hf_model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(
-            Path(config_lm.pretrained_dir), torch_dtype=torch.float32
+            Path(config_lm.hf_checkpoint_dir), torch_dtype=torch.float32
         ) # type: ignore
     
     # monomeric dataset
