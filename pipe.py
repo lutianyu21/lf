@@ -23,10 +23,8 @@ import torch.distributed as dist
 from torch.nn import CrossEntropyLoss
 
 from utils.dplm_utils.dplm import train
-from utils.lf_utils.protein_tokenizer import dist_protein_tokenizer
 from utils.openfold_utils.io import OpenfoldProtein
 from utils.progen2_utils import ProGenForCausalLM, ProGenConfig
-
 from utils.lf_utils import (
     dplm_protein_tokenizer,
     TextTokenizer,
@@ -300,7 +298,7 @@ def main(config: DictConfig):
     # exp1: dplm tokenizer + progen2 lm + dplm dataset
     # exp2: dist tokenizer + progen2 lm + dist dataset
     protein_tokenizer = {
-        "dist": dist_protein_tokenizer,
+        # "dist": dist_protein_tokenizer,
         "dplm": dplm_protein_tokenizer,
     }[str(config_dataset.hf_data_type).split('_')[-1]]
     
