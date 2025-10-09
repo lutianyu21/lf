@@ -379,8 +379,8 @@ class DistMatrixTokenizer(ProteinTokenizer):
 
 dist_protein_tokenizer_ckpt_path = "/AIRvePFS/ai4science/users/zhangzhe/discrete_tokenizer/ckpt/fsq-epoch=1676-val_loss=0.0063.ckpt"
 dist_structure_ckpt_path = "/AIRvePFS/ai4science/users/zhangzhe/discrete_tokenizer/ckpt/structure-epoch=00-val_loss=0.0003.ckpt"
-dist_protein_tokenizer = DistMatrixTokenizer(
-    tokenizer_ckpt_path=dist_protein_tokenizer_ckpt_path,
-    structure_ckpt_path=dist_structure_ckpt_path,
-    map_location="cpu",
-)
+# dist_protein_tokenizer = DistMatrixTokenizer(
+#     tokenizer_ckpt_path=dist_protein_tokenizer_ckpt_path,
+#     structure_ckpt_path=dist_structure_ckpt_path,
+#     map_location="cpu",
+# )
