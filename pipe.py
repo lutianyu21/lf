@@ -317,7 +317,7 @@ def main(config: DictConfig):
 
     # HINT: ProGen2 didn't implement `get_output_embeddings()` and therefore
     # `model.tie_weights()` inside/outside `from_pretrained()` is actually dummy!
-    hf_config: ProGenConfig = ProGenConfig.from_pretrained(Path(config_lm.hf_checkpoint_dir))                                      # type: ignore
+    hf_config: ProGenConfig = ProGenConfig.from_pretrained(Path(config_lm.hf_checkpoint_dir)) # type: ignore
     if config_lm.hf_checkpoint_dir is None:
         hf_model: ProGenForCausalLM = ProGenForCausalLM(hf_config)
         # hf_model.tie_weights() # ensurement
@@ -349,40 +349,33 @@ def main(config: DictConfig):
     
     ds = load_dataset("json", data_files=config_dataset.hf_data_dir, split="train", features=features) # type: ignore
     ds = ds.filter(lambda x: x['total_length'] <= 2048)         # type: ignore
-    split = ds.train_test_split(test_size=2, seed=2025)      # type: ignore
-    train_dataset, eval_dataset = split['train'], split['test']
+    
     # here we construct a hybrid evaluation dataset
     # including 100 items from split['test] and 100 items from split['train']
-    subsplit = train_dataset.train_test_split(test_size=2, seed=2025) # type: ignore
+    split = ds.train_test_split(test_size=100, seed=2025)      # type: ignore
+    train_dataset, eval_dataset = split['train'], split['test']
+    subsplit = train_dataset.train_test_split(test_size=100, seed=2025) # type: ignore
     overfit_dataset = subsplit['test']
+    cameo_dataset: Any = load_dataset("json", data_files="/AIRvePFS/ai4science/users/tianyu/lf/data/cameo2022_dplm.jsonl", split="train", features=features) # type: ignore
     
     # however we need to add a new field 'dev' to distinguish them
-    # for train 'dev' = 0, for overfit 'dev' = 1, for test 'dev' = 2
+    # for train 'dev' = 0, for overfit 'dev' = 1, for eval 'dev' = 2, for test 'dev' = 3
     train_dataset = train_dataset.add_column("dev", [0] * len(train_dataset))    # type: ignore
     overfit_dataset = overfit_dataset.add_column("dev", [1] * len(overfit_dataset)) # type: ignore
     eval_dataset = eval_dataset.add_column("dev", [2] * len(eval_dataset))       # type: ignore
-    eval_dataset = datasets.concatenate_datasets([overfit_dataset, eval_dataset]) # type: ignore
-    print(f"train: {len(train_dataset)} items, eval: {len(eval_dataset)} items")
+    test_dataset = cameo_dataset.add_column("dev", [3] * len(cameo_dataset))     # type: ignore
+    eval_dataset = datasets.concatenate_datasets([overfit_dataset, eval_dataset, test_dataset]) # type: ignore
+    print(
+        f"""
+            train: {len(train_dataset)} items;
+            overfitx100: {len(overfit_dataset)} items;
+            evalx100: {len(eval_dataset)} items;
+            test(cameo2022): {len(test_dataset)} items"""
+        )
     
     # hf-style training process
     hf_model.train()
     training_args = TrainingArguments(**config_trainer, remove_unused_columns=False)
-    # trainer = LFTrainer(
-    #     processor=processor,
-    #     model=hf_model,
-    #     train_collator=TextCollator(processor, eval_mode=False),
-    #     eval_collator=TextCollator(processor, eval_mode=True),
-    #     args=training_args,
-    #     train_dataset=train_dataset,
-    #     eval_dataset=eval_dataset,
-    #     compute_metrics=lf_metrics,
-    # )
-    # trainer.train()
-    
-    # hf-style benchmarking process
-    cameo_dataset = load_dataset("json", data_files="/AIRvePFS/ai4science/users/tianyu/lf/data/cameo2022_dplm.jsonl", split="train", features=features) # type: ignore
-    cameo_dataset = cameo_dataset.add_column("dev", [2] * len(cameo_dataset)) # type: ignore
-    hf_model.eval()
     trainer = LFTrainer(
         processor=processor,
         model=hf_model,
@@ -390,12 +383,10 @@ def main(config: DictConfig):
         eval_collator=TextCollator(processor, eval_mode=True),
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=cameo_dataset,
+        eval_dataset=eval_dataset,
         compute_metrics=lf_metrics,
     )
-    trainer.evaluate()
-    
-
+    trainer.train()
 
 if __name__ == "__main__":
     main()
