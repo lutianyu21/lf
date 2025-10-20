@@ -386,6 +386,9 @@ def main(config: DictConfig):
             model.config.eos_token_id = text_tokenizer.eos_token_id
             model.config.pad_token_id = text_tokenizer.pad_token_id
             model.resize_token_embeddings(text_tokenizer.vocab_size)
+            torch.nn.init.normal_(
+                model.get_input_embeddings().weight, mean=0.0, std=model.config.initializer_range # type: ignore
+            )
             
     # monomeric dataset
     features = Features({
