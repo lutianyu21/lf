@@ -6,15 +6,15 @@
 #SBATCH --job-name=lf-ar                # job name
 #SBATCH --output=output.log             # stdout
 #SBATCH --error=error.log               # stderr
-#SBATCH --nodes=2                       # nodes
+#SBATCH --nodes=4                       # nodes
 #SBATCH --gres=gpu:8                    # GPUs/node
 #SBATCH --ntasks-per-node=1             # tasks/node
 #SBATCH --cpus-per-task=224             # CPUs/task
 #SBATCH --mem=2000                      # memory(MB)/node
 #SBATCH --export=ALL
 
-CONTAINER_PATH=/home/projects/protein/lutianyu/images/lf-progen2-dplm2.sqsh
-CONTAINER_NAME=lf-progen2-dplm2
+CONTAINER_PATH=/home/projects/protein/lutianyu/images/modern.sqsh
+CONTAINER_NAME=modern
 
 # Optimized NCCL and CUDA settings for H800 GPUs:
 export NCCL_DEBUG=INFO
@@ -68,8 +68,7 @@ pip config list
 pip config set global.index-url https://pypi.org/simple
 pip config list
 
-echo "=== Installing dplm env ==="
-PIP=/root/miniconda3/envs/dplm/bin/pip
+PIP=/root/miniconda3/envs/qwen3/bin/pip
 $PIP install colorlog ray einx \
     --trusted-host pypi.org \
     --trusted-host pypi.python.org \
@@ -77,7 +76,7 @@ $PIP install colorlog ray einx \
 
 echo "=== Runnig task ==="
 cd /GenSIvePFS/users/lutianyu/lf
-conda run -n dplm torchrun \
+conda run -n qwen3 torchrun \
     --nnodes=$SLURM_NNODES \
     --nproc_per_node=$GPU_COUNT \
     --rdzv_backend=c10d \
