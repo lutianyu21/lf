@@ -3,8 +3,6 @@ References:
 - OpenFold: https://github.com/aqlaboratory/openfold/blob/main/openfold/np/residue_constants.py
 """
 
-from re import sub
-from cycler import V
 import torch
 import gemmi
 import warnings
