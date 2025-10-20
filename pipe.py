@@ -145,8 +145,8 @@ class LFTrainer(Trainer):
             collater=self.train_collator,
             bucket_size=1000,
             max_batch_size=256,
-            max_tokens=64000,
-            max_square_tokens=64000000,
+            max_tokens=256000,
+            max_square_tokens=256000000,
             max_len=2048,
         )
     
@@ -412,9 +412,9 @@ def main(config: DictConfig):
     
     # here we construct a hybrid evaluation dataset
     # including 100 items from split['test] and 100 items from split['train']
-    split = ds.train_test_split(test_size=2, seed=2025)      # type: ignore
+    split = ds.train_test_split(test_size=100, seed=2025)      # type: ignore
     train_dataset, eval_dataset = split['train'], split['test']
-    subsplit = train_dataset.train_test_split(test_size=2, seed=2025) # type: ignore
+    subsplit = train_dataset.train_test_split(test_size=100, seed=2025) # type: ignore
     overfit_dataset = subsplit['test']
     cameo_dataset: Any = load_dataset("json", data_files=config_dataset.dataset_test, split="train", features=features) # type: ignore
     
