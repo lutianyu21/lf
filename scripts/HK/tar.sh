@@ -2,13 +2,14 @@
 
 # ====================================================================
 # 脚本功能: 批量解压指定目录下所有非 .partial 的 tar 压缩包
-#           如果目标目录已存在同名文件，跳过整个 tar 包
-#           显示进度
+#           已存在的文件将直接跳过，保留进度显示
 # ====================================================================
 
+# 1. 定义源目录和目标目录变量
 SOURCE_DIR="/home/projects/protein/lutianyu/data/AFDB/cityu-data/tsinghua-ai4science/part_00"
 DEST_DIR="/home/projects/protein/lutianyu/data/AFDB/AF_part00"
 
+# 2. 确保目标目录存在 (如果不存在则创建)
 mkdir -p "$DEST_DIR"
 
 echo "========================================="
@@ -17,41 +18,31 @@ echo "源目录: $SOURCE_DIR"
 echo "目标目录: $DEST_DIR"
 echo "-----------------------------------------"
 
-# 获取所有 tar 文件总数
-ALL_ARCHIVES=("$SOURCE_DIR"/*.tar)
-TOTAL=${#ALL_ARCHIVES[@]}
+# 3. 统计总文件数（非 .partial 的 tar 文件）
+TOTAL=$(find "$SOURCE_DIR" -maxdepth 1 -type f -name "*.tar" ! -name "*.partial*" | wc -l)
 COUNT=0
 
+# 4. 循环遍历源目录下的 tar 文件
 for ARCHIVE in "$SOURCE_DIR"/*.tar; do
-    [ -f "$ARCHIVE" ] || continue
+
+    # 跳过不存在的文件（防止通配符没有匹配时报错）
+    [ -e "$ARCHIVE" ] || continue
 
     FILENAME=$(basename "$ARCHIVE")
 
-    # 跳过 .partial 文件
+    # 排除 .partial 文件
     if [[ "$FILENAME" == *".partial"* ]]; then
         echo "--> [跳过] 发现 .partial 文件: $FILENAME"
         continue
     fi
 
+    # 增加计数
     COUNT=$((COUNT + 1))
-    echo "[$COUNT/$TOTAL] 正在处理: $FILENAME"
+    echo "--> [$COUNT/$TOTAL] 正在处理: $FILENAME"
 
-    # 检查 tar 内文件是否全部已经存在目标目录
-    ALL_EXIST=true
-    while IFS= read -r FILE; do
-        if [ ! -f "$DEST_DIR/$FILE" ]; then
-            ALL_EXIST=false
-            break
-        fi
-    done < <(tar -tf "$ARCHIVE")
+    # 使用 tar 解压，直接跳过已存在文件
+    tar -xf "$ARCHIVE" -C "$DEST_DIR" --skip-old-files
 
-    if [ "$ALL_EXIST" = true ]; then
-        echo "    [跳过] 所有文件已存在，跳过整个 tar 包。"
-        continue
-    fi
-
-    # 解压 tar 包到目标目录
-    tar -xf "$ARCHIVE" -C "$DEST_DIR"
     if [ $? -eq 0 ]; then
         echo "    [成功] 解压完成。"
     else
