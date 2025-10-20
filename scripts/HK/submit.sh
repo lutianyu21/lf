@@ -69,7 +69,8 @@ pip config set global.index-url https://pypi.org/simple
 pip config list
 
 PIP=/root/miniconda3/envs/qwen3/bin/pip
-export TMPDIR=/GenSIvePFS/users/lutianyu/tmp
+export TMPDIR=/GenSIvePFS/users/lutianyu/lf/tmp
+mkdir -p $TMPDIR
 $PIP install colorlog ray einx \
     -e /GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold \
     --trusted-host pypi.org \
