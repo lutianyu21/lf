@@ -1,2 +1,1 @@
-from .model import DiscreteTokenizer
-from .structure_diffusion.model import StructurePredictionModel
+from .v2 import DiscreteTokenizer, StructurePredictionModel, version_discrete_tokenizer, version_structure_head

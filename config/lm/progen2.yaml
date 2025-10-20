@@ -1,2 +1,2 @@
-hf_model_type: progen2
-hf_checkpoint_dir: /AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/Mprogen2_Ddplm_dataset1_B64xdynx1/checkpoint-146478
+model_type:   progen2_0.7B
+model_dir:    /GenSIvePFS/users/lutianyu/lf/utils/progen2_utils/checkpoints/progen2-base

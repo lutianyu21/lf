@@ -3,6 +3,8 @@ References:
 - OpenFold: https://github.com/aqlaboratory/openfold/blob/main/openfold/np/residue_constants.py
 """
 
+from re import sub
+from cycler import V
 import torch
 import gemmi
 import warnings
@@ -67,14 +69,49 @@ restype_1to3 = {
 # to the same one letter name (including 'X' and 'U' which we don't use here).
 restype_3to1 = {v: k for k, v in restype_1to3.items()}
 
-# Note that .mmcif supports flexible chain-id while .pdb only supports A-Z, a-z, 0-9,
-pdb_chain_ids = [
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J',
-    'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
-    'U', 'V', 'W', 'X', 'Y', 'Z'
-]
-pdb_chain_ids =  list('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789')
-pdb_chain_order = {chain_id: i for i, chain_id in enumerate(pdb_chain_ids)}
+
+class ChainId2ChainName:
+    CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    BASE = len(CHARS)
+
+    def __getitem__(self, idx: int) -> str:
+        # 1-char
+        if idx < self.BASE:
+            return self.CHARS[idx]
+        # 2-char
+        idx -= self.BASE
+        if idx < self.BASE**2:
+            return self.CHARS[idx // self.BASE] + self.CHARS[idx % self.BASE]
+        # 3-char
+        idx -= self.BASE**2
+        if idx < self.BASE**3:
+            i = idx // (self.BASE**2)
+            j = (idx // self.BASE) % self.BASE
+            k = idx % self.BASE
+            return self.CHARS[i] + self.CHARS[j] + self.CHARS[k]
+        else:
+            raise NotImplementedError()
+
+class ChainName2ChainId:
+    CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    BASE = len(CHARS)
+    
+    def __getitem__(self, name: str) -> int:
+        name = name.upper()
+        L = len(name)
+        if L == 1:
+            return self.CHARS.index(name)
+        elif L == 2:
+            return self.BASE + self.BASE * self.CHARS.index(name[0]) + self.CHARS.index(name[1])
+        elif L == 3:
+            return self.BASE + self.BASE**2 + self.BASE**2 * self.CHARS.index(name[0]) \
+                   + self.BASE * self.CHARS.index(name[1]) + self.CHARS.index(name[2])
+        else:
+            raise NotImplementedError()
+
+
+pdb_chain_ids = ChainId2ChainName()
+pdb_chain_order = ChainName2ChainId()
 
 dtype_template: Dict[str, torch.dtype] = {
     'residue_atom37_coord': torch.float32,
@@ -118,21 +155,42 @@ gemmi_checker = {
 }
 
 
-# TODO if necessary, implement biopython, biotite parser
+# TODO: if necessary, implement biopython, biotite parser
+# WARN: gemmi takes auth_asym_id as name rather than label_asym_id
 def _gemmi_parser(
     p: Path,
     protocol: Dict[str, bool] = gemmi_default_protocol,
-    specify_chains: List[str] | None = None, 
-) -> Any:
-    structure = gemmi.read_structure(str(p))
-    if len(structure) > 1:
-        warnings.warn(f'Multiple conformation({len(structure)}) detected, taking the first conformation only ...')
-    main_model = structure[0]
+    subchains: List[str] | None = None,
+    subchains_flag: str = 'auth',
+    verbose: bool = True,
+) -> dict:
     
-    # DEV: introducing symid, asymid feature & multi-chain cropping
+    if not p.exists():
+        if verbose:
+            raise ValueError(f'File {p} does not exist. Returns empty dict.')
+        else:
+            print(f'File {p} does not exist. Returns empty dict.')
+            return {}
+    
+    # Most possibly due to non-standrd .cif format
+    try:
+        structure = gemmi.read_structure(str(p))
+    except Exception as e:
+        if verbose:
+            raise ValueError(f'Error reading structure from {p}: {e}. Returns empty dict.')
+        else:
+            print(f'Error parsing structure from {p}: {e}. Returns empty dict.')
+            return {}
+
+    structure.remove_alternative_conformations()
+    (it, it_name) = {
+        'auth': (structure[0], [c.name for c in structure[0]]),
+        'label': (structure[0].subchains(), sorted([c.subchain_id() for c in structure[0].subchains()])),
+    }[subchains_flag]
+
     chain2feature: Dict[str, Dict[str, torch.Tensor]] = {}
-    for chain in main_model:
-        if specify_chains is not None and chain.name not in specify_chains: 
+    for chain, name in zip(it, it_name):
+        if subchains is not None and name not in subchains:
             continue
         
         feature_template = {
@@ -151,7 +209,7 @@ def _gemmi_parser(
             if protocol['drop_ligand'] and gemmi_checker['is_ligand'](residue): continue
             if protocol['drop_na'] and gemmi_checker['is_na'](residue): continue
             if protocol['drop_nonstd'] and (not gemmi_checker['is_standard'](residue)): continue
-                    
+            
             atom37_coord = torch.zeros((atom_type_num, 3), dtype=dtype_template['residue_atom37_coord'])    # [37, 3]
             atom37_mask = torch.zeros((atom_type_num), dtype=dtype_template['residue_atom37_mask'])         # [37]
             atom37_bfactor = torch.zeros((atom_type_num), dtype=dtype_template['residue_atom37_bfactor'])   # [37]
@@ -176,11 +234,19 @@ def _gemmi_parser(
                 torch.tensor(residue.seqid.num, dtype=dtype_template['residue_index'])
             )
             feature_template['residue_chain_index'].append(
-                torch.tensor(pdb_chain_order[chain.name], dtype=dtype_template['residue_chain_index'])
+                torch.tensor(pdb_chain_order[name], dtype=dtype_template['residue_chain_index'])
             )
         
         if feature_template['residue_atom37_coord'] != []:
-            chain2feature[chain.name] = {k: torch.stack(v, dim=0) for k, v in feature_template.items()}
+            chain2feature[name] = {k: torch.stack(v, dim=0) for k, v in feature_template.items()}
+    
+    # TODO we will handle non-protein strcutures in the future
+    if chain2feature == {}:
+        if verbose:
+            raise ValueError(f'No residue left after filtering under current protocol. Returns empty dict.')
+        else:
+            print(f'No residue left for {p.stem} after filtering under current protocol. Returns empty dict.')
+            return {}
     
     # Concat different chains
     if protocol['aggregate']:
@@ -209,20 +275,17 @@ class OpenfoldBackbone:
         pass
     
     @classmethod
-    def from_file(cls, path: str | Path):
+    def from_file(cls, path: str | Path, verbose: bool = True):
         # FEAT: support .pdb file and .cif file
         # FEAT: now we can support format like 7dz2.C.cif, 7dz2_C.cif to sepcify chain
         if isinstance(path, str): path = Path(path)
         assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb', '.gz'], f'Unsupported file type: {path.suffix}'
-        specify_chains: List[str] | None = path.stem.replace('_', '.').split('.')
-        if len(specify_chains) > 1:
-            pure_name, specify_chains = specify_chains[0], specify_chains[1:]
-            path = path.parent / (pure_name + path.suffix)
-        else:
-            specify_chains = None
-        
         instance = cls()
-        gemmi_out = _gemmi_parser(path, specify_chains=specify_chains)
+        gemmi_out = _gemmi_parser(path, verbose=verbose)
+        if gemmi_out == {}:
+            instance.entry = 'empty'
+            return instance
+        
         instance.entry = path.stem
         instance.residue_atom37_coord = gemmi_out['residue_atom37_coord']
         instance.residue_atom37_mask = gemmi_out['residue_atom37_mask']
@@ -269,18 +332,44 @@ class OpenfoldProtein:
         super().__init__()
 
     @classmethod
-    def from_file(cls, path: str | Path):
+    def from_file(cls, path: str | Path, verbose: bool = True):
         if isinstance(path, str): path = Path(path)
         assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb', '.gz'], f'Unsupported file type: {path.suffix}'
-        specify_chains: List[str] | None = path.stem.replace('_', '.').split('.')
-        if len(specify_chains) > 1:
-            pure_name, specify_chains = specify_chains[0], specify_chains[1:]
-            path = path.parent / (pure_name + path.suffix)
-        else:
-            specify_chains = None    
+
+        # one can input: 7dz2.cif, 7dz2_C.cif, AF-<ID>.cif.gz
+        # assumption: @ indicates auth_chain_id, % indicates label_chain_id
+        stem = path.name.strip('.gz').strip('.cif')
         
+        if '%' in stem:
+            subchains: List[str] | None = stem.split('%')
+            subchains_flag = 'label'
+            if len(subchains) > 1:
+                pure_name = subchains[0]
+                subchains = subchains[1:]
+                path = path.parent / (pure_name + ''.join(path.suffixes))
+            else:
+                subchains = None
+                
+        elif '@' in stem:
+            subchains: List[str] | None = stem.split('@')
+            subchains_flag = 'auth'
+            if len(subchains) > 1:
+                pure_name = subchains[0]
+                subchains = subchains[1:]
+                path = path.parent / (pure_name + ''.join(path.suffixes))
+            else:
+                subchains = None
+        
+        else:
+            subchains = None
+            subchains_flag = 'auth'
+
         instance = cls()
-        gemmi_out = _gemmi_parser(path, specify_chains=specify_chains)
+        gemmi_out = _gemmi_parser(path, subchains=subchains, subchains_flag=subchains_flag, verbose=verbose)
+        if gemmi_out == {}:
+            instance.entry = 'empty'
+            return instance
+        
         instance.entry = path.stem
         instance.residue_atom37_coord   = gemmi_out['residue_atom37_coord']
         instance.residue_atom37_mask    = gemmi_out['residue_atom37_mask']
@@ -329,6 +418,28 @@ class OpenfoldProtein:
         s = ''.join(res_shortname)
         return s
     
+    def split(self) -> List['OpenfoldProtein']:
+        # split a multi-chain protein into single-chain proteins
+        unique_chain_idx = torch.unique(self.residue_chain_index)
+        protein_list = []
+        for cidx in unique_chain_idx:
+            mask = self.residue_chain_index == cidx
+            chain_name = pdb_chain_ids[int(cidx.item())]
+            protein = OpenfoldProtein.from_dict(
+                {
+                    'entry': f'{self.entry}@{chain_name}',
+                    'residue_atom37_coord': self.residue_atom37_coord[mask],
+                    'residue_atom37_mask': self.residue_atom37_mask[mask],
+                    'residue_mask': self.residue_mask[mask],
+                    'residue_aatype': self.residue_aatype[mask],
+                    'residue_index': self.residue_index[mask],
+                    'residue_chain_index': self.residue_chain_index[mask],
+                    'residue_atom37_bfactor': self.residue_atom37_bfactor[mask],
+                }
+            )
+            protein_list.append(protein)
+        return protein_list
+
     def to(self, device: str | torch.device):
         self.residue_atom37_coord = self.residue_atom37_coord.to(device)
         self.residue_atom37_mask = self.residue_atom37_mask.to(device)
@@ -362,7 +473,6 @@ class OpenfoldProtein:
             raise ValueError('Invalid aatypes.')
         chain_ids = {}
         for i in np.unique(chain_index):  # np.unique gives sorted output
-            if (pdb_chain_num := len(pdb_chain_ids)) <= i: raise ValueError(f'The PDB format supports at most {pdb_chain_num} chains.')
             chain_ids[i] = pdb_chain_ids[i]
 
         # start with MODEL
@@ -448,6 +558,9 @@ class OpenfoldProtein:
     def distance_matrix(self) -> torch.Tensor:
         return self.calpha[:, None, :] - self.calpha[None, :, :]
     
+    def empty(self):
+        return not hasattr(self, 'residue_atom37_coord')
+    
     @property
     def num_chain(self) -> int:
         return torch.unique(self.residue_chain_index).numel()
@@ -469,3 +582,4 @@ class OpenfoldProtein:
         cb_coord = self.residue_atom37_coord[:, atom_order['CB'], :]
         impute_coord = self.calpha
         return cb_coord * cb_mask[:, None] + impute_coord * (1 - cb_mask[:, None])
+    

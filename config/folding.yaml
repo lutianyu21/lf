@@ -2,7 +2,7 @@ defaults:
   - _self_
   - dataset: dataset1_dplm
   - lm: progen2
-  - trainer: progen2
+  - trainer: lf
 
 name: dummy
 dataset:

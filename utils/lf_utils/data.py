@@ -1,14 +1,12 @@
 from typing import Any, Callable, Dict, Iterable, List
 
+import math
+import numpy as np
 import torch
 import torch.utils
 import torch.utils.data
 import torch.distributed as dist
 
-import math
-import numpy as np
-
-from utils.dplm_utils.dplm import train
 
 from .protein_processor import ProteinProcessor
 
@@ -62,7 +60,6 @@ class TextCollator:
             dev=dev
         )
 
-
 class SortishSampler(torch.utils.data.Sampler):
     def __init__(
         self,
@@ -106,8 +103,7 @@ class SortishSampler(torch.utils.data.Sampler):
 
     def set_epoch(self, epoch):
         self.epoch = epoch
-        
-        
+ 
 class ApproxBatchSampler(torch.utils.data.BatchSampler):
     def __init__(
         self,

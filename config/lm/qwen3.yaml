@@ -1,2 +1,2 @@
-hf_model_type: qwen3
-hf_checkpoint_dir: /AIRvePFS/ai4science/users/tianyu/lf/utils/qwen_utils/checkpoints/Qwen3-0.6B
+model_type:   qwen3_0.6B
+model_dir:    /GenSIvePFS/users/lutianyu/lf/utils/qwen_utils/checkpoints/qwen3/Qwen3-0.6B

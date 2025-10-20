@@ -1,2 +1,3 @@
-hf_data_type: dataset1_dplm
-hf_data_dir: /AIRvePFS/ai4science/users/tianyu/lf/data/dataset1_dplm.jsonl
+dataset_type:   dataset1_dplm
+dataset_train:  /GenSIvePFS/users/lutianyu/lf/data/dataset1_dplm.jsonl
+dataset_test:   /GenSIvePFS/users/lutianyu/lf/data/cameo2022_dplm.jsonl

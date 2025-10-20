@@ -1,15 +1,18 @@
 
-from pathlib import Path
+import chunk
+from sys import version
+import time
 from typing import Any, Dict, Optional, List, Tuple
-from sympy import residue
+
+import re
+from pathlib import Path
+
+import numpy as np
+import torch
+
 import transformers
 from transformers import ProcessorMixin
 from transformers.feature_extraction_utils import BatchFeature
-
-import torch
-import numpy as np
-import re
-import pandas as pd
 
 from .text_tokenizer import TextTokenizer
 from .protein_tokenizer import ProteinTokenizer
@@ -21,6 +24,12 @@ __all__ = ['ProteinProcessor']
 
 class ProteinProcessor(ProcessorMixin):
     """ Organize components. """
+    tokenizer: TextTokenizer
+    struct_tokenizer: ProteinTokenizer
+    struct_vsz: int
+    struct_regex: str
+    struct_template: str
+    constant: Dict[str, int | List[int] | Any]
     
     attributes = ["tokenizer"]
     tokenizer_class = "PreTrainedTokenizerFast"
@@ -80,7 +89,7 @@ class ProteinProcessor(ProcessorMixin):
                 eval_inputs[k] = v                  # [B, L_seq]
         
         if kwargs.get('return_tensors') != 'pt':
-            raise NotImplementedError() # TODO
+            raise NotImplementedError('Only support pt tensors') # TODO
 
         return BatchFeature(train_inputs), BatchFeature(eval_inputs) # type: ignore
 
@@ -161,27 +170,92 @@ class ProteinProcessor(ProcessorMixin):
     def compute_kbastch_align(structure1: OpenfoldProtein, structure2: OpenfoldProtein) -> Tuple[float, float]:
         raise NotImplementedError()
     
-    def build_dataset(self, batch: List[dict]) -> List[dict]:
+    
+    def build_dataset(
+        self,
+        src: str,
+        batch: List[dict],
+        verbose: bool = True
+    ) -> List[dict]:
+        return []
+        
+        # TODO fix this
+        
         proteins: List[OpenfoldProtein] = []
         results: List[dict] = []
+        
+            
+        if src == 'af_tax':
+            # In this case, multiple AF entries are stored in a tar file for each tax_id
+            # e.g. for proteome-tax_id-1974607-0_v4.tar, we have
+            # - AF-A0A2H0UIM4-F1-model_v4.cif.gz
+            # - AF-A0A2H0UIM4-F1-confidence_v4.json.gz
+            # - AF-A0A2H0UIM4-F1-predicted_aligned_error_v4.json.gz
+            # so we need to extract each entry from the .tar file first
+            # create a temporary directory to extract the files
+            # then process each file and finally remove them
+            import tarfile
+            import tempfile
+            
+            
+            # connect proteins into chunks to avoid OOM
+            
+            
+            for row in batch:
+                print('processing tax_id:', row['tax_id'])
+                tax_id = row['tax_id']
+                tar_path = Path(f"/GenSIvePFS/users/lutianyu/lf/data/afdb_proteome_cif_v4/proteome-tax_id-{tax_id}-0_v4.tar")
+                with tarfile.open(tar_path, 'r') as tar:
+                    for member in tar.getmembers():
+                        if member.name.endswith('-model_v4.cif.gz'):
+                            # a temporary file to store the extracted cif file
+                            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                                tmp.write(tar.extractfile(member).read()) # type: ignore
+                                f = tmp.name
 
-        # parse protein (CPU)
-        for row in batch:
-            pdb_name, split = row["pdb_name"], row["split"]
-            if split == "afdb_swissprot":
-                protein_path = Path(f"/AIRvePFS/ai4science/users/tianyu/lf/data/swissprot_cif_v4/{pdb_name}.cif.gz")
-            elif split == "pdb" or split == "cameo2022":
-                protein_path = Path(f"/AIRvePFS/ai4science/users/tianyu/lf/data/rcsb_mmcif/{pdb_name}.cif")
-            else:
-                raise ValueError(f"Unknown split {split}")
-            proteins.append(OpenfoldProtein.from_file(protein_path))
-
+                            if f is not None:
+                                p = OpenfoldProtein.from_file(f, verbose=verbose)
+                                # TODO remove constraint
+                                if p.entry != 'empty':
+                                    proteins += p.split()
+        
+        else:
+            raise NotImplementedError()
+        
+        
+        
+        # optional1: given entry + split
+        # if 'protein_path' not in batch[0].keys():
+        #     tmpl = {
+        #         "afdb_swissprot":   "/GenSIvePFS/users/lutianyu/lf/data/swissprot_cif_v4/{x}.cif.gz",
+        #         "pdb":              "/GenSIvePFS/users/lutianyu/lf/data/rcsb_mmcif/{x}.cif",
+        #         "cameo2022":       "/GenSIvePFS/users/lutianyu/lf/data/rcsb_mmcif/{x}.cif",
+        #     }
+        #     for row in batch:
+        #         protein_path = Path(tmpl[row["split"]].format(x=row["pdb_name"]))
+        #         p = OpenfoldProtein.from_file(protein_path, verbose=verbose)
+        #         # TODO remove constraint
+        #         if p.entry != 'empty':
+        #             proteins += p.split()
+        
+        # # optional2: given protein_path
+        # else:
+        #     for row in batch:
+        #         protein_path = Path(row["protein_path"])
+        #         p = OpenfoldProtein.from_file(protein_path, verbose=verbose)
+        #         # TODO remove constraint
+        #         if p.entry != 'empty':
+        #             proteins += p.split()
+        
+        if len(proteins) == 0: return results
+        
         # batch tokenizeation (GPU)
         proteins = [p.to(self.struct_tokenizer.device) for p in proteins]
-        out =  self.struct_tokenizer(proteins)
+        out = self.struct_tokenizer(proteins)
         batch_token_ids = out['batch_token_ids'] # [B, L]
         batch_padding_mask = (batch_token_ids == -100).long()
-        for row, protein, token_ids, padding_mask in zip(batch, proteins, batch_token_ids, batch_padding_mask):
+        
+        for protein, token_ids, padding_mask in zip(proteins, batch_token_ids, batch_padding_mask):
             seq_text = str(protein)
             seq_length = len(protein)
             token_ids = token_ids[~padding_mask.bool()]
@@ -189,7 +263,8 @@ class ProteinProcessor(ProcessorMixin):
             struct_length = len(token_ids)
             text = f"<|bos|><|boseq|>{seq_text}<|eoseq|><|bostruct|>{struct_text}<|eostruct|><|eos|>"
             prompt = f"<|bos|><|boseq|>{seq_text}<|eoseq|><|bostruct|>"  
-            row.update({
+            results.append({
+                "pdb_name": protein.entry,
                 "text": text,
                 "prompt": prompt,
                 "seq_length": seq_length,
@@ -198,9 +273,90 @@ class ProteinProcessor(ProcessorMixin):
                 "seq_text": seq_text,
                 "struct_text": struct_text,
             })
-            results.append(row)
         return results
     
+    
+    
+    
+    
+    def _build_dataset_from_tax(
+        self,
+        batch: List[dict],
+        verbose: bool = True,
+        oom: int = 500
+    ) -> List[dict]:
+        # In this case, multiple AF entries are stored in a tar file for each tax_id
+        # e.g. for proteome-tax_id-1974607-0_v4.tar, we have
+        # - AF-A0A2H0UIM4-F1-model_v4.cif.gz
+        # - AF-A0A2H0UIM4-F1-confidence_v4.json.gz
+        # - AF-A0A2H0UIM4-F1-predicted_aligned_error_v4.json.gz
+        # so we need to extract each entry from the .tar file first
+        # create a temporary directory to extract the files
+        # then process each file and finally remove them
+        
+        def submit2tokenizer(proteins: List[OpenfoldProtein]) -> List[dict]:
+            if len(proteins) == 0:
+                return []
+            proteins = [p.to(self.struct_tokenizer.device) for p in proteins]
+            out = self.struct_tokenizer(proteins)
+            batch_token_ids = out['batch_token_ids'] # [B, L]
+            batch_padding_mask = (batch_token_ids == -100).long()
+            local_results: List[dict] = []
+            for protein, token_ids, padding_mask in zip(proteins, batch_token_ids, batch_padding_mask):
+                seq_text = str(protein)
+                seq_length = len(protein)
+                token_ids = token_ids[~padding_mask.bool()]
+                struct_text = "".join([self.struct_template.format(token_id=i) for i in token_ids])
+                struct_length = len(token_ids)
+                text = f"<|bos|><|boseq|>{seq_text}<|eoseq|><|bostruct|>{struct_text}<|eostruct|><|eos|>"
+                prompt = f"<|bos|><|boseq|>{seq_text}<|eoseq|><|bostruct|>"  
+                local_results.append({
+                    "pdb_name":     protein.entry,
+                    "text":         text,
+                    "seq_text":     seq_text,
+                    "struct_text":  struct_text,
+                    "prompt":       prompt,
+                    "seq_length":   seq_length,
+                    "struct_length": struct_length,
+                    "total_length": seq_length + struct_length + 6,
+                })
+            return local_results
+        
+        import tarfile
+        import tempfile
+        # we strictly limit the num_proteins for tokenizer.forward() to avoid OOM
+        proteins: List[OpenfoldProtein] = []
+        results: List[dict] = []
+        proteins_buffer: List[OpenfoldProtein] = []
+        for row in batch:
+            tax_id = row['tax_id']
+            tar_path = Path(f"/GenSIvePFS/users/lutianyu/lf/data/afdb_proteome_cif_v4/proteome-tax_id-{tax_id}-0_v4.tar")
+            with tarfile.open(tar_path, 'r') as tar:
+                for member in tar:
+                    if member.name.endswith('-model_v4.cif.gz'):
+                        # a temporary *.cif.gz
+                        # removed after processing
+                        with tempfile.NamedTemporaryFile(delete=True) as tmp:
+                            tmp.write(tar.extractfile(member).read()) # type: ignore
+                            f = tmp.name
+                            p = OpenfoldProtein.from_file(f, verbose=verbose)
+                            if p.empty():
+                                if verbose: raise RuntimeError(f"Failed to load protein from {f}")
+                                continue
+                            p_split = p.split()
+                            if len(proteins_buffer) + len(p_split) > oom:
+                                # immediately submit to tokenizer
+                                results += submit2tokenizer(proteins_buffer)
+                                proteins_buffer.clear()
+                            proteins_buffer += p_split
+                # almost end processing one tax.tar
+        # almost end processing one batch
+        if len(proteins_buffer) > 0:
+            results += submit2tokenizer(proteins_buffer)
+            proteins_buffer.clear()
+        # end processing batch
+        return results
+
     def to(self, device: str | torch.device):
         self.struct_tokenizer.to(device)
         return self
@@ -208,3 +364,4 @@ class ProteinProcessor(ProcessorMixin):
     @property
     def device(self) -> torch.device:
         return self.struct_tokenizer.device
+

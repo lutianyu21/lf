@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from typing import Dict, Any, Optional, Tuple
-from .vector_quantize_pytorch import (
+from typing import Dict, Any, Optional, Tuple, Union
+from ..vector_quantize_pytorch import (
     VectorQuantize, FSQ, LFQ, SimVQ, 
     ResidualVQ, ResidualFSQ, ResidualLFQ, ResidualSimVQ
 )
@@ -28,11 +28,14 @@ class MultiHeadSelfAttention(nn.Module):
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
         
-        attn = (q @ k.transpose(-2, -1)) * (self.head_dim ** -0.5)
-        attn = attn.softmax(dim=-1)
-        attn = self.dropout(attn)
-        
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            dropout_p=self.dropout.p if self.training else 0.0,
+            is_causal=False
+        )
+        x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.dropout(x)
         return x
@@ -85,12 +88,24 @@ class ViTEncoder(nn.Module):
         dropout: float = 0.0,
         z_channels: int = 64,
         double_z: bool = False,
+        use_param_pos_embed: bool = False,
+        pos_embed_grid_size: int = 64,
     ):
         super().__init__()
         self.in_channels = in_channels
         self.patch_size = patch_size
         self.embed_dim = embed_dim
         self.z_channels = z_channels
+        self.use_param_pos_embed = use_param_pos_embed
+
+        grid_size = (pos_embed_grid_size, pos_embed_grid_size)
+        self.pos_embed_grid_size = grid_size
+
+        if self.use_param_pos_embed:
+            grid_h, grid_w = self.pos_embed_grid_size
+            self.pos_embed_param = nn.Parameter(torch.randn(1, embed_dim, grid_h, grid_w))
+        else:
+            self.pos_embed_param = None
 
         # Conv and patch embedding
         self.conv_in = nn.Conv2d(in_channels, embed_dim // 4, kernel_size=3, stride=1, padding=1)
@@ -107,17 +122,37 @@ class ViTEncoder(nn.Module):
         self.head = nn.Linear(embed_dim, output_channels)
         
     def get_pos_embed(self, h_patches, w_patches):
-        num_patches = h_patches * w_patches
-        pos_embed = torch.zeros(1, num_patches, self.embed_dim, device=next(self.parameters()).device)
-        pos_h = torch.arange(h_patches, device=pos_embed.device).unsqueeze(1).repeat(1, w_patches).flatten()
-        pos_w = torch.arange(w_patches, device=pos_embed.device).unsqueeze(0).repeat(h_patches, 1).flatten()
-        dim = self.embed_dim // 2
-        div_term = torch.exp(torch.arange(0, dim, 2, device=pos_embed.device) * -(math.log(10000.0) / dim))
+        if self.use_param_pos_embed:
+            pos_embed = self.pos_embed_param
+            if pos_embed.shape[-2] != h_patches or pos_embed.shape[-1] != w_patches:
+                pos_embed = F.interpolate(
+                    pos_embed,
+                    size=(h_patches, w_patches),
+                    mode='bilinear',
+                    align_corners=False
+                )
+            return pos_embed.flatten(2).transpose(1, 2)
 
-        pos_embed[0, :, 0::4] = torch.sin(pos_h.unsqueeze(1) * div_term).view(num_patches, -1)
-        pos_embed[0, :, 1::4] = torch.cos(pos_h.unsqueeze(1) * div_term).view(num_patches, -1)
-        pos_embed[0, :, 2::4] = torch.sin(pos_w.unsqueeze(1) * div_term).view(num_patches, -1)
-        pos_embed[0, :, 3::4] = torch.cos(pos_w.unsqueeze(1) * div_term).view(num_patches, -1)
+        device = next(self.parameters()).device
+        dtype = next(self.parameters()).dtype
+        num_patches = h_patches * w_patches
+        pos_embed = torch.zeros(1, num_patches, self.embed_dim, device=device, dtype=dtype)
+        pos_h = torch.arange(h_patches, device=device).unsqueeze(1).repeat(1, w_patches).flatten()
+        pos_w = torch.arange(w_patches, device=device).unsqueeze(0).repeat(h_patches, 1).flatten()
+        dim = self.embed_dim // 2
+        div_term = torch.exp(
+            torch.arange(0, dim, 2, device=device, dtype=torch.float32) * -(math.log(10000.0) / dim)
+        )
+
+        sin_h = torch.sin(pos_h.unsqueeze(1) * div_term).view(num_patches, -1)
+        cos_h = torch.cos(pos_h.unsqueeze(1) * div_term).view(num_patches, -1)
+        sin_w = torch.sin(pos_w.unsqueeze(1) * div_term).view(num_patches, -1)
+        cos_w = torch.cos(pos_w.unsqueeze(1) * div_term).view(num_patches, -1)
+
+        pos_embed[0, :, 0::4] = sin_h
+        pos_embed[0, :, 1::4] = cos_h
+        pos_embed[0, :, 2::4] = sin_w
+        pos_embed[0, :, 3::4] = cos_w
 
         return pos_embed
         
@@ -134,7 +169,7 @@ class ViTEncoder(nn.Module):
         _, embed_dim, h_patches, w_patches = x.shape
         x = x.flatten(2).transpose(1, 2)    # [B, (H//patch_size)*(W//patch_size), embed_dim]
 
-        pos_embed = self.get_pos_embed(h_patches, w_patches)
+        pos_embed = self.get_pos_embed(h_patches, w_patches).to(x.dtype)
         x = x + pos_embed
         
         for block in self.blocks:
@@ -230,7 +265,7 @@ class ViTDecoder(nn.Module):
         return x
 
 
-def create_quantizer(quantizer_type: str, **kwargs) -> nn.Module:
+def create_quantizer(quantizer_type: str, **kwargs) -> Any:
     """Create quantizer based on configuration."""
     quantizer_map = {
         'vq': VectorQuantize,
@@ -269,7 +304,9 @@ class DiscreteTokenizer(nn.Module):
         z_channels: int = 64,
         double_z: bool = False,
         quantizer_type: str = 'vq',
-        quantizer_kwargs: Optional[Dict[str, Any]] = None
+        quantizer_kwargs: Optional[Dict[str, Any]] = None,
+        use_param_pos_embed: bool = False,
+        pos_embed_grid_size: Union[int, Tuple[int, int]] = 64
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -277,6 +314,8 @@ class DiscreteTokenizer(nn.Module):
         self.patch_size = patch_size
         self.z_channels = z_channels
         self.quantizer_type = quantizer_type
+        self.use_param_pos_embed = use_param_pos_embed
+        self.pos_embed_grid_size = pos_embed_grid_size
         
         if quantizer_kwargs is None:
             quantizer_kwargs = {}
@@ -291,7 +330,9 @@ class DiscreteTokenizer(nn.Module):
             mlp_ratio=mlp_ratio,
             dropout=dropout,
             z_channels=z_channels,
-            double_z=double_z
+            double_z=double_z,
+            use_param_pos_embed=use_param_pos_embed,
+            pos_embed_grid_size=pos_embed_grid_size
         )
         
         # Create quantizer
@@ -317,7 +358,7 @@ class DiscreteTokenizer(nn.Module):
         Args:
             x: Input tensor [B, L, L, C]
         Returns:
-            quantized: Quantized tensor [B, H, W, z_channels]
+            quantized: Quantized tensor [B, z_channels, H, W]
             indices: Quantization indices
             commit_loss: Commitment loss from quantizer
         """
@@ -357,9 +398,9 @@ class DiscreteTokenizer(nn.Module):
         """Forward pass through the model.
         
         Args:
-            x: Input tensor [B, L, L, C]
+            x: Input tensor [B, L, L, 3]
         Returns:
-            reconstructed: Reconstructed tensor [B, L, L, C]
+            reconstructed: Reconstructed tensor [B, L, L, 3]
             indices: Quantization indices
             commit_loss: Commitment loss
         """
@@ -369,7 +410,11 @@ class DiscreteTokenizer(nn.Module):
         return reconstructed, indices, commit_loss
     
     def indices_decode(self, indices):
-        quantized = self.quantizer.indices_to_codes(indices)
+        if self.quantizer_type in ['fsq']:
+            quantized = self.quantizer.indices_to_codes(indices)
+        elif self.quantizer_type in ['vq']:
+            quantized = self.quantizer.get_output_from_indices(indices)
+            quantized = quantized.permute(0, 3, 1, 2)
         reconstructed = self.decode(quantized)
         return reconstructed
     

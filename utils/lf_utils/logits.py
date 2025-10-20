@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional, Tuple
+
 import torch
 from transformers import LogitsProcessor
 

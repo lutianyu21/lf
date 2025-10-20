@@ -1,19 +1,8 @@
-from cgitb import text
 from typing import Any, Dict, Optional, List, Text, Tuple, cast
-import hydra
 import os
-import pandas as pd
-import wandb
 from pathlib import Path
-from omegaconf import OmegaConf, DictConfig
-
-import datasets
-from datasets import Dataset, load_dataset, Features, Value, ClassLabel, Sequence
-from transformers import Trainer, TrainingArguments, TrainerCallback, is_datasets_available
-from transformers.generation.configuration_utils import GenerationConfig
-from transformers import PreTrainedModel
-from transformers import EvalPrediction
-from tokenizers import Tokenizer
+import wandb
+import pandas as pd
 
 import numpy as np
 import torch
@@ -21,18 +10,52 @@ import torch.utils
 import torch.utils.data
 import torch.distributed as dist
 from torch.nn import CrossEntropyLoss
+from torch.optim import AdamW
+
+import hydra
+import logging
+import colorlog
+from omegaconf import OmegaConf, DictConfig
+import datasets
+from datasets import Dataset, load_dataset, Features, Value, ClassLabel, Sequence
+from transformers import AutoConfig, Trainer, TrainingArguments, TrainerCallback, is_datasets_available
+from transformers.generation.configuration_utils import GenerationConfig
+from transformers import PreTrainedModel
+from transformers import EvalPrediction
+from tokenizers import Tokenizer
 
 from utils.dplm_utils.dplm import train
-from utils.openfold_utils.io import OpenfoldProtein
-from utils.progen2_utils import ProGenForCausalLM, ProGenConfig
+from utils.lf_utils.protein_tokenizer import DistMatrixTokenizer
+from utils.openfold_utils import OpenfoldProtein
 from utils.lf_utils import (
-    dplm_protein_tokenizer,
+    DistMatrixTokenizer,
+    DPLMProteinTokenizer,
     TextTokenizer,
     ProteinProcessor, 
     SortishApproxBatchDataloader,
     TextCollator,
     DynamicMultimodalLogitsProcessor
 )
+
+# fix bug
+# log color whenrank=0 & silent when rank>0
+rank = int(os.environ.get("RANK", 0))
+logger = logging.getLogger(__name__)
+handler = colorlog.StreamHandler()
+handler.setFormatter(colorlog.ColoredFormatter(
+    "%(log_color)s" + f"[rank{rank}]" + "[%(asctime)s][%(levelname)s]" + " %(message)s",
+    log_colors={
+        'DEBUG':    'cyan',
+        'INFO':     'green',
+        'WARNING':  'yellow',
+        'ERROR':    'red',
+        'CRITICAL': 'bold_red',
+    }
+))
+logger.handlers.clear()
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
 
 
 class LFTrainer(Trainer):
@@ -55,11 +78,10 @@ class LFTrainer(Trainer):
             bos_token_id=self.processor.tokenizer.bos_token_id,
             pad_token_id=self.processor.tokenizer.pad_token_id,
             do_sample=False,
-            max_new_tokens=2048,
+            max_new_tokens=5000,
         )
-    
-    def compute_loss(self, model, inputs: Dict[str, torch.Tensor], return_outputs=False):
-        
+
+    def compute_loss(self, model, inputs: Dict[str, torch.Tensor], return_outputs=False, num_items_in_batch=None):
         # ! we now no-longer relies on model forward to compute auxiliary loss !
         outputs = model(**inputs)
         
@@ -122,9 +144,9 @@ class LFTrainer(Trainer):
             ds=self.train_dataset,
             collater=self.train_collator,
             bucket_size=1000,
-            max_batch_size=100,
-            max_tokens=10000,
-            max_square_tokens=3000000,
+            max_batch_size=256,
+            max_tokens=64000,
+            max_square_tokens=64000000,
             max_len=2048,
         )
     
@@ -205,16 +227,17 @@ class LFTrainer(Trainer):
         total_length = inputs['total_length'] # [B]
         generated_token_ids = torch.where(generated_token_ids == self.processor.tokenizer.pad_token_id, -100, generated_token_ids)
         
-        
         # step2: collect proteins 
         pdb_name, split = inputs["pdb_name"], inputs["split"]
+        template = {
+            "afdb_swissprot":   "data/swissprot_cif_v4/{x}.cif.gz",
+            "pdb":              "data/rcsb_mmcif/{x}.cif",
+            "cameo2022":        "data/rcsb_mmcif/{x}.cif"
+        }
         protein_collect = [
-            OpenfoldProtein.from_file(Path(f"/AIRvePFS/ai4science/users/tianyu/lf/data/swissprot_cif_v4/{x}.cif.gz")).to(device)
-            if y == "afdb_swissprot"
-            else OpenfoldProtein.from_file(Path(f"/AIRvePFS/ai4science/users/tianyu/lf/data/rcsb_mmcif/{x}.cif")).to(device)
+            OpenfoldProtein.from_file(Path(__file__).parent/template[y].format(x=x)).to(device)
             for x, y in zip(pdb_name, split)
         ]
-        
         tmp = {
             'tm_rec':       [],
             'rmsd_rec':     [],
@@ -268,7 +291,10 @@ def lf_metrics(eval_pred: EvalPrediction):
     df = pd.DataFrame({k: v for k, v in preds.items()})
     metrics = {}
     for dev, group in df.groupby('dev'):
-        prefix = 'overfit' if dev == 1 else 'test'
+        if dev == 3: prefix = 'cameo2022'
+        elif dev == 2: prefix = 'evalx100'
+        elif dev == 1: prefix = 'overfitx100'
+        else: prefix = 'train'
         metrics[f'{prefix}_tm_rec'] = group['tm_rec'].mean()
         metrics[f'{prefix}_tm_dec'] = group['tm_dec'].mean()
         metrics[f'{prefix}_tm_gen'] = group['tm_gen'].mean()
@@ -284,24 +310,20 @@ def main(config: DictConfig):
     
     config_dataset, config_lm, config_trainer = config.dataset, config.lm, config.trainer
     config.name = "M{}_D{}_B{}x{}x{}".format(
-        config_lm.get('hf_model_type', 'dummy'),
-        config_dataset.get('hf_data_type', 'dummy'),
-        int(os.environ["WORLD_SIZE"]),
-        'dyn',
-        config_trainer.get('gradient_accumulation_steps', 1)
+        config_lm.get('model_type', 'dummy'),
+        config_dataset.get('dataset_type', 'dummy'),
+        int(os.environ["WORLD_SIZE"]), 'dyn', config_trainer.get('gradient_accumulation_steps', 1)
     )
-    config_trainer.output_dir = f'/AIRvePFS/ai4science/users/tianyu/lf/output/checkpoints/{config.name}'
-
+    config_trainer.output_dir = str(Path(__file__).parent/f'output/checkpoints/{config.name}')
     if (rank := int(os.environ.get("RANK", 0))) == 0:
         wandb.init(project="LLMFolding", name=config.name, config=OmegaConf.to_container(config, resolve=True)) # type: ignore
     
     # exp1: dplm tokenizer + progen2 lm + dplm dataset
     # exp2: dist tokenizer + progen2 lm + dist dataset
     protein_tokenizer = {
-        # "dist": dist_protein_tokenizer,
-        "dplm": dplm_protein_tokenizer,
-    }[str(config_dataset.hf_data_type).split('_')[-1]]
-    
+        "dist": DistMatrixTokenizer,
+        "dplm": DPLMProteinTokenizer,
+    }[str(config_dataset.dataset_type).split('_')[-1]].get_instance()
     text_tokenizer = TextTokenizer(
         tokenizer_object=Tokenizer.from_file(str(Path(__file__).parent/'utils/progen2_utils/progen/progen2/tokenizer.json')),
         pad_token='<|pad|>',
@@ -314,19 +336,57 @@ def main(config: DictConfig):
         tokenizer=text_tokenizer,
         struct_tokenizer=protein_tokenizer
     )
-
-    # HINT: ProGen2 didn't implement `get_output_embeddings()` and therefore
-    # `model.tie_weights()` inside/outside `from_pretrained()` is actually dummy!
-    hf_config: ProGenConfig = ProGenConfig.from_pretrained(Path(config_lm.hf_checkpoint_dir)) # type: ignore
-    if config_lm.hf_checkpoint_dir is None:
-        hf_model: ProGenForCausalLM = ProGenForCausalLM(hf_config)
-        # hf_model.tie_weights() # ensurement
-        hf_model.resize_token_embeddings(text_tokenizer.vocab_size)
-    else:
-        hf_model: ProGenForCausalLM = ProGenForCausalLM.from_pretrained(
-            Path(config_lm.hf_checkpoint_dir), torch_dtype=torch.float32
-        ) # type: ignore
     
+    # find any file ends with `.pt` `.pth` `.bin` under the model_dir
+    model_dir = Path(config_lm.model_dir)
+    model_files = list(model_dir.rglob("*.pt")) + list(model_dir.rglob("*.pth")) + list(model_dir.rglob("*.bin")) + list(model_dir.rglob("*.safetensors"))
+    
+    # https://github.com/enijkamp/progen2
+    if config_lm.model_type.startswith('progen'):
+        from utils.progen2_utils import ProGenForCausalLM, ProGenConfig
+        if not model_files:
+            logger.info('Training ProGen2 from scratch ...')
+            model = ProGenForCausalLM(config=ProGenConfig.from_pretrained(model_dir))
+        else:
+            logger.info(f'Loading ProGen2 from {model_dir} ...')
+            model = ProGenForCausalLM.from_pretrained(model_dir, torch_dtype=torch.float32) # type: ignore
+        
+        if config_trainer.get('gradient_checkpointing', True):
+            logger.warning(
+                'Progen2 transformers gradient_checkpointing API not implemented yet, manually enable gradient_checkpoint config instead'
+            )
+            OmegaConf.set_struct(config_trainer, False)
+            config_trainer.pop("gradient_checkpointing", False)
+            OmegaConf.set_struct(config_trainer, True)
+            model.transformer.config.gradient_checkpointing = True
+        model.resize_token_embeddings(text_tokenizer.vocab_size)
+
+    # https://github.com/QwenLM/Qwen3
+    elif config_lm.model_type.startswith('qwen'):
+        from transformers import AutoConfig, AutoModelForCausalLM
+        if not model_files:
+            raise NotImplementedError('Something wrong with memeory')
+            model_config = AutoConfig.from_pretrained(model_dir)
+            model_config.bos_token_id = text_tokenizer.bos_token_id
+            model_config.eos_token_id = text_tokenizer.eos_token_id
+            model_config.pad_token_id = text_tokenizer.pad_token_id
+            model_config.vocab_size = text_tokenizer.vocab_size
+            model = AutoModelForCausalLM.from_config(
+                config=model_config,
+                attn_implementation="eager"
+            )
+        else:
+            logger.info(f'[Info] Loading Qwen3 from {model_dir} ...')
+            model = AutoModelForCausalLM.from_pretrained(
+                model_dir,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2"
+            )
+            model.config.bos_token_id = text_tokenizer.bos_token_id
+            model.config.eos_token_id = text_tokenizer.eos_token_id
+            model.config.pad_token_id = text_tokenizer.pad_token_id
+            model.resize_token_embeddings(text_tokenizer.vocab_size)
+            
     # monomeric dataset
     features = Features({
         'pdb_name': Value('string'),
@@ -347,16 +407,16 @@ def main(config: DictConfig):
         'avg_plddt': Value('float32'),
     })
     
-    ds = load_dataset("json", data_files=config_dataset.hf_data_dir, split="train", features=features) # type: ignore
-    ds = ds.filter(lambda x: x['total_length'] <= 2048)         # type: ignore
+    ds = load_dataset("json", data_files=config_dataset.dataset_train, split="train", features=features) # type: ignore
+    ds = ds.filter(lambda x: x['seq_length'] <= 512)            # type: ignore
     
     # here we construct a hybrid evaluation dataset
     # including 100 items from split['test] and 100 items from split['train']
-    split = ds.train_test_split(test_size=100, seed=2025)      # type: ignore
+    split = ds.train_test_split(test_size=2, seed=2025)      # type: ignore
     train_dataset, eval_dataset = split['train'], split['test']
-    subsplit = train_dataset.train_test_split(test_size=100, seed=2025) # type: ignore
+    subsplit = train_dataset.train_test_split(test_size=2, seed=2025) # type: ignore
     overfit_dataset = subsplit['test']
-    cameo_dataset: Any = load_dataset("json", data_files="/AIRvePFS/ai4science/users/tianyu/lf/data/cameo2022_dplm.jsonl", split="train", features=features) # type: ignore
+    cameo_dataset: Any = load_dataset("json", data_files=config_dataset.dataset_test, split="train", features=features) # type: ignore
     
     # however we need to add a new field 'dev' to distinguish them
     # for train 'dev' = 0, for overfit 'dev' = 1, for eval 'dev' = 2, for test 'dev' = 3
@@ -364,29 +424,28 @@ def main(config: DictConfig):
     overfit_dataset = overfit_dataset.add_column("dev", [1] * len(overfit_dataset)) # type: ignore
     eval_dataset = eval_dataset.add_column("dev", [2] * len(eval_dataset))       # type: ignore
     test_dataset = cameo_dataset.add_column("dev", [3] * len(cameo_dataset))     # type: ignore
-    eval_dataset = datasets.concatenate_datasets([overfit_dataset, eval_dataset, test_dataset]) # type: ignore
-    print(
-        f"""
-            train: {len(train_dataset)} items;
-            overfitx100: {len(overfit_dataset)} items;
-            evalx100: {len(eval_dataset)} items;
-            test(cameo2022): {len(test_dataset)} items"""
-        )
+    logger.info(
+        f"""Datasets include: train items x{len(train_dataset)}; overfit items x{len(overfit_dataset)}; eval items x{len(eval_dataset)}; cameo2022 items x{len(test_dataset)};"""
+    )
+    final_train_dataset = train_dataset
+    final_eval_dataset = datasets.concatenate_datasets([overfit_dataset, eval_dataset, test_dataset]) # type: ignore
     
-    # hf-style training process
-    hf_model.train()
+    # training process
+    model.train()
+    model._dynamic_tied_weights_keys = {'lm_head.weight', 'transformer.wte.weight'}
     training_args = TrainingArguments(**config_trainer, remove_unused_columns=False)
     trainer = LFTrainer(
         processor=processor,
-        model=hf_model,
+        model=model,
         train_collator=TextCollator(processor, eval_mode=False),
         eval_collator=TextCollator(processor, eval_mode=True),
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=final_train_dataset,
+        eval_dataset=final_eval_dataset,
         compute_metrics=lf_metrics,
     )
     trainer.train()
+
 
 if __name__ == "__main__":
     main()

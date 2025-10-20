@@ -1,10 +1,11 @@
+from sre_parse import Tokenizer
+import tokenize
+from typing import Dict, List, Optional, Union, cast
+
 import warnings
 from pathlib import Path
-from typing import Dict, List, Optional, Union, cast
-from byprot.tasks.lm import dplm
 from omegaconf import OmegaConf
 import math
-from sympy import residue
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -14,8 +15,8 @@ from ..openfold_utils.io import OpenfoldBackbone, OpenfoldProtein, atom_order
 
 __all__ = [
     'ProteinTokenizer',
-    'DPLMProteinTokenizer', 'dplm_protein_tokenizer',
-    'DistMatrixTokenizer', 'dist_protein_tokenizer',
+    'DPLMProteinTokenizer',
+    'DistMatrixTokenizer',
 ]
 
 
@@ -63,13 +64,23 @@ class DPLMProteinTokenizer(ProteinTokenizer):
         OmegaConf.resolve(config)
         tokenizer = DPLMVQModel(**config) # type: ignore
         if ckpt_path is not None:
-            pretrained_state_dict = torch.load(ckpt_path, map_location="cpu",)
+            pretrained_state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=False)
             missing_keys, unexpected_keys = tokenizer.load_state_dict(pretrained_state_dict, strict=True)
             tokenizer = tokenizer.requires_grad_(False)
             tokenizer = tokenizer.train(not eval_mode)
         self.tokenizer = tokenizer
         self.config = config
-    
+        
+    @classmethod
+    def get_instance(cls):
+        dplm_protein_tokenizer_path = Path(__file__).parent.parent/'dplm_utils/checkpoints/struct_tokenizer'
+        torch.hub.set_dir(dplm_protein_tokenizer_path)
+        return cls(
+            config_path=dplm_protein_tokenizer_path/'config.yaml',
+            ckpt_path=dplm_protein_tokenizer_path/'dplm2_struct_tokenizer.ckpt',
+            eval_mode=True
+        )
+
     def __call__(self, batch_proteins: List[OpenfoldProtein]) -> Dict[str, torch.Tensor]:
         # support batch encode, thus batch_padding_mask is returned
         collect_residue_atom37_coord = [p.residue_atom37_coord for p in batch_proteins]
@@ -172,15 +183,6 @@ class DPLMProteinTokenizer(ProteinTokenizer):
     def vsz(self) -> int:
         return self.config.codebook_config.num_codes
 
-dplm_protein_tokenizer_path = Path(__file__).parent.parent/'dplm_utils/checkpoints/struct_tokenizer'
-torch.hub.set_dir(dplm_protein_tokenizer_path)
-dplm_protein_tokenizer = DPLMProteinTokenizer(
-    config_path=dplm_protein_tokenizer_path/'config.yaml',
-    ckpt_path=dplm_protein_tokenizer_path/'dplm2_struct_tokenizer.ckpt',
-    eval_mode=True
-)
-
-
 
 class DistMatrixTokenizer(ProteinTokenizer):
     def __init__(
@@ -196,7 +198,7 @@ class DistMatrixTokenizer(ProteinTokenizer):
         self.map_location = map_location
 
         print(f"Loading tokenizer checkpoint from: {self.tokenizer_ckpt_path}")
-        tokenizer_checkpoint = torch.load(self.tokenizer_ckpt_path, map_location=map_location)
+        tokenizer_checkpoint = torch.load(self.tokenizer_ckpt_path, map_location=map_location, weights_only=False)
         self.config = tokenizer_checkpoint["hyper_parameters"]["config"]
 
         self.model = DiscreteTokenizer(
@@ -222,7 +224,7 @@ class DistMatrixTokenizer(ProteinTokenizer):
         self.model.load_state_dict(tokenizer_state)
 
         print(f"Loading structure checkpoint from: {self.structure_ckpt_path}")
-        structure_checkpoint = torch.load(self.structure_ckpt_path, map_location=map_location)
+        structure_checkpoint = torch.load(self.structure_ckpt_path, map_location=map_location, weights_only=False)
         self.structure_config = structure_checkpoint["hyper_parameters"]["config"]
 
         self.structure_model = StructurePredictionModel(
@@ -248,6 +250,15 @@ class DistMatrixTokenizer(ProteinTokenizer):
 
         self.model.eval()
         self.structure_model.eval()
+    
+    @classmethod
+    def get_instance(cls):
+        from ..dist_utils import version_discrete_tokenizer, version_structure_head
+        return cls(
+            tokenizer_ckpt_path=version_discrete_tokenizer,
+            structure_ckpt_path=version_structure_head,
+            map_location="cpu",
+        )
 
     @torch.no_grad()
     def __call__(self, batch_proteins: list[OpenfoldProtein]) -> dict[str, torch.Tensor]:
@@ -376,11 +387,3 @@ class DistMatrixTokenizer(ProteinTokenizer):
     def vsz(self) -> int:
         quantizer = self.model.quantizer
         return quantizer.codebook_size
-
-dist_protein_tokenizer_ckpt_path = "/AIRvePFS/ai4science/users/zhangzhe/discrete_tokenizer/ckpt/fsq-epoch=1676-val_loss=0.0063.ckpt"
-dist_structure_ckpt_path = "/AIRvePFS/ai4science/users/zhangzhe/discrete_tokenizer/ckpt/structure-epoch=00-val_loss=0.0003.ckpt"
-# dist_protein_tokenizer = DistMatrixTokenizer(
-#     tokenizer_ckpt_path=dist_protein_tokenizer_ckpt_path,
-#     structure_ckpt_path=dist_structure_ckpt_path,
-#     map_location="cpu",
-# )

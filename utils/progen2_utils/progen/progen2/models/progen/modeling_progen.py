@@ -25,6 +25,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss
 import torch.nn.functional as F
 
+from transformers import GenerationConfig, GenerationMixin
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
@@ -284,7 +285,7 @@ class ProGenBlock(nn.Module):
         return outputs  # hidden_states, present, (attentions)
 
 
-class ProGenPreTrainedModel(PreTrainedModel):
+class ProGenPreTrainedModel(PreTrainedModel, GenerationMixin):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
     models.
@@ -479,17 +480,16 @@ class ProGenModel(ProGenPreTrainedModel):
             if getattr(self.config, "gradient_checkpointing", False) and self.training:
 
                 if use_cache:
-                    logger.warning(
-                        "`use_cache=True` is incompatible with `config.gradient_checkpointing=True`. Setting "
-                        "`use_cache=False`..."
-                    )
+                    # logger.warning(
+                    #     "`use_cache=True` is incompatible with `config.gradient_checkpointing=True`. Setting "
+                    #     "`use_cache=False`..."
+                    # )
                     use_cache = False
 
                 def create_custom_forward(module):
                     def custom_forward(*inputs):
                         # None for past_key_value
                         return module(*inputs, use_cache, output_attentions)
-
                     return custom_forward
 
                 outputs = torch.utils.checkpoint.checkpoint(
@@ -498,6 +498,7 @@ class ProGenModel(ProGenPreTrainedModel):
                     None,
                     attention_mask,
                     head_mask[i],
+                    use_reentrant=False
                 )
             else:
                 outputs = block(
@@ -551,6 +552,9 @@ class ProGenForCausalLM(ProGenPreTrainedModel):
         # Model parallel
         self.model_parallel = False
         self.device_map = None
+        
+        self.generation_config = GenerationConfig.from_model_config(config)
+        self.generation_config.transformers_version = "4.56.2"  # or the version you use
 
     def parallelize(self, device_map=None):
         self.device_map = (

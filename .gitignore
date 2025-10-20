@@ -5,9 +5,6 @@
 /trash
 /wandb
 /output
-**/dplm
-
-/pretrain_utils
 
 *.ipynb
 *.txt
@@ -15,6 +12,7 @@
 *.cif
 *.jsonl
 *.csv
+*.vscode
 
 # slink
 data/rcsb_mmcif

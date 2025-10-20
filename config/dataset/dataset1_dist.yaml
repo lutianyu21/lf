@@ -1,2 +1,3 @@
-hf_data_type: dataset1_dist
-hf_data_dir: /AIRvePFS/ai4science/users/tianyu/lf/data/dataset1_dist.jsonl
+dataset_type:   dataset1_dist
+dataset_train:  /GenSIvePFS/users/lutianyu/lf/data/dataset1_dist_v2.jsonl
+dataset_test:   /GenSIvePFS/users/lutianyu/lf/data/cameo2022_dist_v2.jsonl

@@ -6,7 +6,7 @@
 #SBATCH --job-name=lf-ar                # job name
 #SBATCH --output=output.log             # stdout
 #SBATCH --error=error.log               # stderr
-#SBATCH --nodes=8                       # nodes
+#SBATCH --nodes=2                       # nodes
 #SBATCH --gres=gpu:8                    # GPUs/node
 #SBATCH --ntasks-per-node=1             # tasks/node
 #SBATCH --cpus-per-task=224             # CPUs/task
@@ -70,22 +70,13 @@ pip config list
 
 echo "=== Installing dplm env ==="
 PIP=/root/miniconda3/envs/dplm/bin/pip
-$PIP install ray --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
-$PIP install einx --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org
-$PIP show torch >/dev/null 2>&1 || $PIP install \
-    --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
-    torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu121
-
-$PIP show ByProt >/dev/null 2>&1 || $PIP install \
-    --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
-    -e /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm
-
-$PIP show openfold >/dev/null 2>&1 || $PIP install \
-    --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org \
-    -e /AIRvePFS/ai4science/users/tianyu/lf/utils/dplm_utils/dplm/vendor/openfold
+$PIP install colorlog ray einx \
+    --trusted-host pypi.org \
+    --trusted-host pypi.python.org \
+    --trusted-host files.pythonhosted.org
 
 echo "=== Runnig task ==="
-cd /AIRvePFS/ai4science/users/tianyu/lf
+cd /GenSIvePFS/users/lutianyu/lf
 conda run -n dplm torchrun \
     --nnodes=$SLURM_NNODES \
     --nproc_per_node=$GPU_COUNT \
@@ -111,8 +102,8 @@ fi
 
 # Export variable in the container:
 numactl --cpunodebind=0 --membind=0 srun enroot start -r \
-    --mount /home/projects/protein/lutianyu/lf:/AIRvePFS/ai4science/users/tianyu/lf \
-    --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/AIRvePFS/ai4science/users/tianyu/lf/data/rcsb_mmcif \
+    --mount /home/projects/protein/lutianyu/lf:/GenSIvePFS/users/lutianyu/lf \
+    --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/rcsb_mmcif \
     -w $CONTAINER_NAME \
     -- /bin/bash -c "
     export SLURM_JOB_ID=$SLURM_JOB_ID; \
