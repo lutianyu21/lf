@@ -13,6 +13,7 @@
 
 CONTAINER_PATH=/home/projects/protein/lutianyu/images/modern.sqsh
 CONTAINER_NAME=modern
+RAY_BIN=/root/miniconda3/envs/qwen3/bin/ray  # Ray 完整路径
 
 # -------------------------------
 # 环境变量配置
@@ -57,8 +58,8 @@ srun --nodes=1 --ntasks=1 -w $head_node enroot start -r \
     --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/rcsb_mmcif \
     -w $CONTAINER_NAME \
     -- bash -c "
-        ray stop >/dev/null 2>&1;
-        ray start --head --node-ip-address=$head_ip --port=$port --num-cpus=224 --num-gpus=8;
+        $RAY_BIN stop >/dev/null 2>&1;
+        $RAY_BIN start --head --node-ip-address=$head_ip --port=$port --num-cpus=224 --num-gpus=8;
         echo 'Ray head started on $head_ip:$port';
         sleep infinity;
     " &
@@ -75,8 +76,8 @@ for node in "${nodes[@]:1}"; do
         --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/rcsb_mmcif \
         -w $CONTAINER_NAME \
         -- bash -c "
-            ray stop >/dev/null 2>&1;
-            ray start --address='$head_ip:$port' --num-cpus=224 --num-gpus=8;
+            $RAY_BIN stop >/dev/null 2>&1;
+            $RAY_BIN start --address='$head_ip:$port' --num-cpus=224 --num-gpus=8;
             echo 'Worker joined $head_ip:$port';
             sleep infinity;
         " &
@@ -93,9 +94,9 @@ srun --nodes=1 --ntasks=1 -w $head_node enroot start -r \
     -- bash -c "
         export RAY_DEDUP_LOGS=0;
         cd /GenSIvePFS/users/lutianyu/lf;
-        conda run -n qwen3 python t.py;
+        python t.py;
         echo '=== Ray job done ===';
-        ray stop;
+        $RAY_BIN stop;
     "
 
 # -------------------------------
@@ -104,7 +105,7 @@ srun --nodes=1 --ntasks=1 -w $head_node enroot start -r \
 echo "=== Cleaning up Ray workers ==="
 for node in "${nodes[@]}"; do
     srun --nodes=1 --ntasks=1 -w $node enroot start -r -w $CONTAINER_NAME \
-        -- bash -c "ray stop" &
+        -- bash -c "$RAY_BIN stop" &
 done
 
 wait
