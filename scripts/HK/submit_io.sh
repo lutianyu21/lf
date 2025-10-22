@@ -92,8 +92,6 @@ srun --nodes=1 --ntasks=1 -w $head_node enroot start -r \
     -w $CONTAINER_NAME \
     -- bash -c "
         export RAY_DEDUP_LOGS=0;
-        export TMPDIR=/GenSIvePFS/users/lutianyu/lf/tmp;
-        mkdir -p \$TMPDIR;
         cd /GenSIvePFS/users/lutianyu/lf;
         conda run -n qwen3 python t.py;
         echo '=== Ray job done ===';
