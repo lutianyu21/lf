@@ -6,8 +6,8 @@ import ray
 ray.init(log_to_driver=True)
 
 main_pickle(
-    src_dir="/home/projects/protein/lutianyu/data/AFDB/part-02",
-    dst_dir="/home/projects/protein/lutianyu/data/AFDB/pickle/part-02",
+    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/part-02",
+    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-02",
     max_concurrent=1000,
 )
 
