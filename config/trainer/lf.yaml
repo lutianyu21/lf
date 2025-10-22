@@ -13,10 +13,10 @@ weight_decay: 0.01
 max_grad_norm: 1.0
 max_steps: 50000
 warmup_steps: 1000
-learning_rate: 1e-4
+learning_rate: 1e-3
 lr_scheduler_type: polynomial
 lr_scheduler_kwargs:
-  lr_end: 1e-5
+  lr_end: 1e-4
   power: 1.0
 
 # training config

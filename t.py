@@ -6,8 +6,8 @@ import ray
 ray.init(log_to_driver=True)
 
 main_pickle(
-    src_dir="/GenSIvePFS/users/lutianyu/lf/data/swissprot_cif_v4",
-    dst_dir="/GenSIvePFS/users/lutianyu/lf/data/pickle/swissprot_cif_v4",
+    src_dir="/GenSIvePFS/users/lutianyu/data/swissprot_cif_v4",
+    dst_dir="/GenSIvePFS/users/lutianyu/data/pickle/swissprot_cif_v4",
     max_concurrent=1000,
 )
 
