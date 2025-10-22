@@ -344,7 +344,7 @@ def main(config: DictConfig):
     # https://github.com/enijkamp/progen2
     if config_lm.model_type.startswith('progen'):
         from utils.progen2_utils import ProGenForCausalLM, ProGenConfig
-        if not model_files:
+        if config_lm.model_type.endswith('scratch'):
             logger.info('Training ProGen2 from scratch ...')
             model = ProGenForCausalLM(config=ProGenConfig.from_pretrained(model_dir))
         else:
@@ -363,18 +363,16 @@ def main(config: DictConfig):
 
     # https://github.com/QwenLM/Qwen3
     elif config_lm.model_type.startswith('qwen'):
-        from transformers import AutoConfig, AutoModelForCausalLM
-        if not model_files:
-            raise NotImplementedError('Something wrong with memeory')
-            model_config = AutoConfig.from_pretrained(model_dir)
-            model_config.bos_token_id = text_tokenizer.bos_token_id
-            model_config.eos_token_id = text_tokenizer.eos_token_id
-            model_config.pad_token_id = text_tokenizer.pad_token_id
-            model_config.vocab_size = text_tokenizer.vocab_size
-            model = AutoModelForCausalLM.from_config(
-                config=model_config,
-                attn_implementation="eager"
-            )
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoModel
+        if config_lm.model_type.endswith('scratch'):
+            logger.info('Training Qwen3 from scratch ...')
+            model = AutoModel.from_config(AutoConfig.from_pretrained(model_dir), attn_implementation="flash_attention_2")
+            model.config.bos_token_id = text_tokenizer.bos_token_id
+            model.config.eos_token_id = text_tokenizer.eos_token_id
+            model.config.pad_token_id = text_tokenizer.pad_token_id
+            model.config.vocab_size = text_tokenizer.vocab_size
+            model.resize_token_embeddings(text_tokenizer.vocab_size)
+        
         else:
             logger.info(f'[Info] Loading Qwen3 from {model_dir} ...')
             model = AutoModelForCausalLM.from_pretrained(
@@ -386,9 +384,6 @@ def main(config: DictConfig):
             model.config.eos_token_id = text_tokenizer.eos_token_id
             model.config.pad_token_id = text_tokenizer.pad_token_id
             model.resize_token_embeddings(text_tokenizer.vocab_size)
-            torch.nn.init.normal_(
-                model.get_input_embeddings().weight, mean=0.0, std=model.config.initializer_range # type: ignore
-            )
             
     # monomeric dataset
     features = Features({
