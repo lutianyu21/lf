@@ -144,7 +144,7 @@ def main_pickle(
     results, failures, futures = [], [], []
     total_count = 0
     # TODO convert generator to support others
-    for p in iterate_swissprot(src_dir):
+    for p in iterate_afdb(src_dir):
         futures.append(process_file.remote(p, dst_dir))
         total_count += 1
         if len(futures) >= max_concurrent:

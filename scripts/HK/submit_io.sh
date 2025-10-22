@@ -2,8 +2,8 @@
 #SBATCH --account=protein
 #SBATCH --partition=AISS2024110101
 #SBATCH --job-name=lf-ray
-#SBATCH --output=output_ray.log
-#SBATCH --error=error_ray.err
+#SBATCH --output=ray.log
+#SBATCH --error=ray.err
 #SBATCH --nodes=4
 #SBATCH --gres=gpu:8
 #SBATCH --ntasks-per-node=1
@@ -68,7 +68,7 @@ sleep 20  # 等待 head 稳定启动
 # -------------------------------
 # Step 3. 启动 Ray Worker 节点
 # -------------------------------
-for node in "${nodes[@]:1]}"; do
+for node in "${nodes[@]:1}"; do
     echo "=== Starting Ray worker on $node ==="
     srun --nodes=1 --ntasks=1 -w $node enroot start -r \
         --mount /home/projects/protein/lutianyu:/GenSIvePFS/users/lutianyu \
