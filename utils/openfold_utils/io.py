@@ -368,7 +368,7 @@ class OpenfoldProtein:
             instance.entry = 'empty'
             return instance
         
-        instance.entry = path.stem
+        instance.entry = stem
         instance.residue_atom37_coord   = gemmi_out['residue_atom37_coord']
         instance.residue_atom37_mask    = gemmi_out['residue_atom37_mask']
         instance.residue_mask           = gemmi_out['residue_mask']
@@ -580,4 +580,11 @@ class OpenfoldProtein:
         cb_coord = self.residue_atom37_coord[:, atom_order['CB'], :]
         impute_coord = self.calpha
         return cb_coord * cb_mask[:, None] + impute_coord * (1 - cb_mask[:, None])
+    
+    @property
+    def plddt(self) -> float:
+        if not self.entry.startswith('AF'): return 0.0
+        else:
+            plddt_residue = self.residue_atom37_bfactor.sum(dim=1) / self.residue_atom37_mask.sum(dim=1) # [L]
+            return plddt_residue.mean(dim=0).item()
     
