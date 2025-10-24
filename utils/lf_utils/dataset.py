@@ -212,19 +212,25 @@ class PickleWorker:
 
     def fn(self):
         batch = []
-        for i, path in enumerate(self.root.rglob("*.pkl")):
-            if i % self.group_size != self.group_id:
-                continue
-            try:
-                logger.info(f"Reading {path}...")
-                with open(path, "rb") as f:
-                    obj = pickle.load(f)
-                batch.append(obj)
-                if len(batch) >= self.batch_size:
-                    self.out_queue.put(batch)
-                    batch = []
-            except Exception as e:
-                logger.warning(f"Failed to read {path}: {e}")
+        count = 0 
+        with os.scandir(self.root) as it:
+            for entry in it:
+                if not entry.is_file() or not entry.name.endswith(".pkl"):
+                    continue
+                if count % self.group_size != self.group_id:
+                    count += 1
+                    continue
+                count += 1
+                try:
+                    with open(entry.path, "rb") as f:
+                        obj = pickle.load(f)
+                    batch.append(obj)
+                    logger.debug(f"Reading {entry.path}...")
+                    if len(batch) >= self.batch_size:
+                        self.out_queue.put(batch)
+                        batch = []
+                except Exception as e:
+                    logger.warning(f"Failed to read {entry.path}: {e}")
         if batch:
             self.out_queue.put(batch)
         self.out_queue.put(None)
