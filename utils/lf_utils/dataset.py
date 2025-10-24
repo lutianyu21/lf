@@ -239,6 +239,7 @@ def step2_parquet(
 ):
     if isinstance(src_dir, str): src_dir = Path(src_dir)
     if isinstance(dst_dir, str): dst_dir = Path(dst_dir)
+    if dst_dir.exists(): dst_dir.unlink()
     dst_dir.mkdir(parents=True, exist_ok=True)
     
     seed_everything(2025)
