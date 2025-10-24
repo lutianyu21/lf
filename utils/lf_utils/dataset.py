@@ -1,3 +1,4 @@
+from math import log
 from typing import Any, Iterator, List
 from pathlib import Path
 import tarfile
@@ -215,6 +216,7 @@ class PickleWorker:
             if i % self.group_size != self.group_id:
                 continue
             try:
+                logger.info(f"Reading {path}...")
                 with open(path, "rb") as f:
                     obj = pickle.load(f)
                 batch.append(obj)
