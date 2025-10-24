@@ -21,3 +21,7 @@ data/swissprot_cif_v4
 
 /cache
 /pytest
+
+# still developing
+/infra
+/pt

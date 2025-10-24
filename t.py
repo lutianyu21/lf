@@ -1,28 +1,41 @@
 # test build_dataset_from_entry
-from utils.lf_utils import protein_processor, main_pickle
+from utils.lf_utils import protein_processor, step1_pickle, step2_parquet
 from pathlib import Path
 import ray
 
 ray.init(log_to_driver=True)
 
-main_pickle(
-    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/part-02",
-    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-02",
-    max_concurrent=1000,
+# main_pickle(
+#     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/part-02",
+#     dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-02",
+#     max_concurrent=1000,
+# )
+
+
+# step1_pickle(
+#     src_dir="/GenSIvePFS/users/lutianyu/lf/data/swissprot_cif_v4",
+#     dst_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
+#     dataset_name="swissprot_cif_v4",
+#     max_concurrent=2000,
+# )
+
+# step2_parquet(
+#     src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
+#     dst_dir="/GenSIvePFS/users/lutianyu/lf/pytest/parquet",
+#     tokenizer_name='dist',
+#     num_cpu_workers=10,
+#     num_gpu_workers=2,
+#     batch_size=4000,
+#     part_size=100000,
+# )
+
+# HK version
+step2_parquet(
+    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-02",
+    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-02",
+    tokenizer_name='dist',
+    num_cpu_workers=10,
+    num_gpu_workers=8,
+    batch_size=6000,
+    part_size=100000,
 )
-
-
-# ---- example ----
-# build_dataset(
-#     csv_path=Path('/GenSIvePFS/users/lutianyu/lf/data/cameo2022.csv'),
-#     jsonl_path=Path('/GenSIvePFS/users/lutianyu/lf/data/cameo2022_dplm_io2.jsonl'),
-#     batch_size=50,
-#     num_workers=2,
-# )
-
-# build_dataset(
-#     csv_path=Path('/GenSIvePFS/users/lutianyu/lf/data/dataset2.csv'),
-#     jsonl_path=Path('/GenSIvePFS/users/lutianyu/lf/data/dataset2_dplm_new.jsonl'),
-#     batch_size=100,
-#     num_workers=2
-# )

@@ -5,6 +5,6 @@ from .protein_tokenizer import (
     DistMatrixTokenizer,
 )
 from .text_tokenizer import TextTokenizer
-from .ray import main_pickle
+from .dataset import step1_pickle, step2_parquet
 from .data import TextCollator, SortishApproxBatchDataloader
 from .logits import DynamicMultimodalLogitsProcessor

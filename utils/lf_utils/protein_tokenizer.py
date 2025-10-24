@@ -83,6 +83,7 @@ class DPLMProteinTokenizer(ProteinTokenizer):
 
     def __call__(self, batch_proteins: List[OpenfoldProtein]) -> Dict[str, torch.Tensor]:
         # support batch encode, thus batch_padding_mask is returned
+        batch_proteins = [p.to(self.device) for p in batch_proteins]
         collect_residue_atom37_coord = [p.residue_atom37_coord for p in batch_proteins]
         collect_residue_mask = [p.residue_mask for p in batch_proteins]
         
