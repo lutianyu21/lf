@@ -36,6 +36,6 @@ step2_parquet(
     tokenizer_name='dist',
     num_cpu_workers=10,
     num_gpu_workers=8,
-    batch_size=1000,
+    batch_size=6000,
     part_size=100000,
 )
