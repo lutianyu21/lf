@@ -233,6 +233,7 @@ class PickleWorker:
                     logger.warning(f"Failed to read {entry.path}: {e}")
         if batch:
             self.out_queue.put(batch)
+        logger.info(f"[gid={self.group_id}] Finished reading files.")
         self.out_queue.put(None)
 
 
@@ -251,7 +252,7 @@ def step2_parquet(
     
     seed_everything(2025)
     
-    queue = Queue(10)   
+    queue = Queue(100)
     gpu_workers = [GPUWorker.remote(tokenizer_name) for _ in range(num_gpu_workers)]
     gpu_workers_max = num_gpu_workers * 2
     cpu_workers = [PickleWorker.remote(str(src_dir), queue, batch_size, num_cpu_workers, i) for i in range(num_cpu_workers)]
