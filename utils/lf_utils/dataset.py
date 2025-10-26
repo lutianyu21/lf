@@ -1,4 +1,3 @@
-from math import log
 from typing import Any, Iterator, List
 from pathlib import Path
 import tarfile
@@ -67,15 +66,18 @@ def _stream_iterate_afdb(tax_dir: str | Path) -> Iterator[Path]:
     tmp_root = Path(tempfile.gettempdir()) / f"pid_{os.getpid()}"
     tmp_root.mkdir(parents=True, exist_ok=True)
     for tar_path in tax_dir.glob("proteome-tax_id-*_v4.tar"):
-        with tarfile.open(tar_path, "r") as tf:
-            for member in tf:
-                if member.name.endswith("-F1-model_v4.cif.gz"):
-                    f = tf.extractfile(member)
-                    if f is None: continue
-                    tmp_path = tmp_root / Path(member.name).name
-                    with open(tmp_path, "wb") as out_f:
-                        shutil.copyfileobj(f, out_f)
-                    yield tmp_path
+        try:
+            with tarfile.open(tar_path, "r") as tf:
+                for member in tf:
+                    if member.name.endswith("-F1-model_v4.cif.gz"):
+                        f = tf.extractfile(member)
+                        if f is None: continue
+                        tmp_path = tmp_root / Path(member.name).name
+                        with open(tmp_path, "wb") as out_f:
+                            shutil.copyfileobj(f, out_f)
+                        yield tmp_path
+        except Exception as e:
+            logger.error(f"Failed to extract {tar_path}: {e}")
 
 
 def _stream_iterate_swissprot(swiss_dir: str | Path) -> Iterator[Path]:
@@ -306,12 +308,11 @@ def step2_parquet(
                 
     logger.info("⌛ Waiting for remaining GPU tasks...")
     while pending_refs:
-        ready, pending_refs = ray.wait([r for r, _ in pending_refs], num_returns=1)
+        ready, pending_refs = ray.wait(pending_refs, num_returns=1)
         result = ray.get(ready[0])
         elapsed = time.time() - time_start
         time_start = time.time()
         logger.info(f"[{int(elapsed)}s] Processed batch of {len(result)} items (pending={len(pending_refs)})")
-            
         table = pyarrow.Table.from_pylist(result)
         if parquet_writer is None:
             dst_file = dst_dir / f"dataset_part{current_part}.parquet"
