@@ -4,7 +4,8 @@ from pathlib import Path
 import ray
 from ray.util.queue import Queue
 
-ray.init(address="auto")
+if not ray.is_initialized():
+    ray.init(address="auto")
 queue = Queue(maxsize=200)
 queue_ref = ray.put(queue)
 
