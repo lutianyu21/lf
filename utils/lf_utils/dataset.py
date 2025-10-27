@@ -194,24 +194,28 @@ class GPUWorker:
         if not gpu_ids:
             raise RuntimeError("No GPU assigned to this actor")
         self.device = torch.device(f"cuda:0")
-        struct_tokenizer ={
-            "dplm": DPLMProteinTokenizer,
-            "dist": DistMatrixTokenizer,
-        }[tokenizer_name].get_instance()
-        text_tokenizer = TextTokenizer(
-            tokenizer_object=Tokenizer.from_file(str(Path(__file__).parent/'aatype_tokenizer.json')),
-            pad_token='<|pad|>',
-            bos_token='<|bos|>',
-            eos_token='<|eos|>',
-            padding_side='left',
-            struct_vsz=struct_tokenizer.vsz,
-        )
-        self.processor = ProteinProcessor(
-            tokenizer=text_tokenizer,
-            struct_tokenizer=struct_tokenizer,
-        ).to(self.device)
+        # lazy initilaize
+        self.tokenizer_name = tokenizer_name
+        self.processor = None
 
     def fn(self, batch: List[OpenfoldProtein]):
+        if self.processor is None:
+            struct_tokenizer = {
+                "dplm": DPLMProteinTokenizer,
+                "dist": DistMatrixTokenizer,
+            }[self.tokenizer_name].get_instance()
+            text_tokenizer = TextTokenizer(
+                tokenizer_object=Tokenizer.from_file(str(Path(__file__).parent/'aatype_tokenizer.json')),
+                pad_token='<|pad|>',
+                bos_token='<|bos|>',
+                eos_token='<|eos|>',
+                padding_side='left',
+                struct_vsz=struct_tokenizer.vsz,
+            )
+            self.processor = ProteinProcessor(
+                tokenizer=text_tokenizer,
+                struct_tokenizer=struct_tokenizer,
+            ).to(self.device)
         return self.processor.preprocess_dataset(batch, verbose=False)
 
 
@@ -229,7 +233,8 @@ class PickleWorker:
         self.group_id = group_id
         self.batch_size = batch_size
 
-    def fn(self, out_queue: Queue):
+    def fn(self, queue_ref: ray.ObjectRef):
+        out_queue = ray.get(queue_ref)
         batch = []
         count = 0 
         with os.scandir(self.root) as it:
@@ -278,7 +283,7 @@ def step2_parquet(
     cpu_workers = [PickleWorker.remote(str(src_dir), batch_size, num_cpu_workers, i) for i in range(num_cpu_workers)]
     cpu_workers_done = 0
     for w in cpu_workers:
-        w.fn.remote(queue)  # type: ignore
+        w.fn.remote(queue_ref)  # type: ignore
     
     bid = 0
     current_part = 0
