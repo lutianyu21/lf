@@ -217,18 +217,16 @@ class PickleWorker:
     def __init__(
         self,
         root: str,
-        out_queue: Queue,
         batch_size: int,
         group_size: int,
         group_id: int,
     ):
         self.root = Path(root)
-        self.out_queue = out_queue
         self.group_size = group_size
         self.group_id = group_id
         self.batch_size = batch_size
 
-    def fn(self):
+    def fn(self, out_queue: Queue):
         batch = []
         count = 0 
         with os.scandir(self.root) as it:
@@ -245,14 +243,14 @@ class PickleWorker:
                     batch.append(obj)
                     logger.debug(f"Reading {entry.path}...")
                     if len(batch) >= self.batch_size:
-                        self.out_queue.put(batch)
+                        out_queue.put(batch)
                         batch = []
                 except Exception as e:
                     logger.warning(f"Failed to read {entry.path}: {e}")
         if batch:
-            self.out_queue.put(batch)
+            out_queue.put(batch)
         logger.info(f"[gid={self.group_id}] Finished reading files.")
-        self.out_queue.put(None)
+        out_queue.put(None)
 
 
 def step2_parquet(
@@ -270,13 +268,13 @@ def step2_parquet(
     
     seed_everything(2025)
     
-    queue = Queue(100)
+    queue = Queue(200) 
     gpu_workers = [GPUWorker.remote(tokenizer_name) for _ in range(num_gpu_workers)]
     gpu_workers_max = num_gpu_workers * 2
-    cpu_workers = [PickleWorker.remote(str(src_dir), queue, batch_size, num_cpu_workers, i) for i in range(num_cpu_workers)]
+    cpu_workers = [PickleWorker.remote(str(src_dir), batch_size, num_cpu_workers, i) for i in range(num_cpu_workers)]
     cpu_workers_done = 0
     for w in cpu_workers:
-        w.fn.remote()  # type: ignore
+        w.fn.remote(queue)  # type: ignore
     
     bid = 0
     current_part = 0
