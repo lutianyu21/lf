@@ -2,8 +2,11 @@
 from utils.lf_utils import protein_processor, step1_pickle, step2_parquet
 from pathlib import Path
 import ray
+from ray.util.queue import Queue
 
 ray.init(address="auto")
+queue = Queue(maxsize=200)
+queue_ref = ray.put(queue)
 
 
 # step1_pickle(
@@ -34,6 +37,7 @@ step2_parquet(
     num_gpu_workers=8,
     batch_size=6000,
     part_size=120000,
+    queue_ref=queue_ref,
 )
 
 
