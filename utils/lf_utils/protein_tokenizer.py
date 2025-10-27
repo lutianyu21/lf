@@ -227,9 +227,8 @@ class DistMatrixTokenizer(ProteinTokenizer):
         print(f"Loading structure checkpoint from: {self.structure_ckpt_path}")
         structure_checkpoint = torch.load(self.structure_ckpt_path, map_location=map_location, weights_only=False)
         self.structure_config = structure_checkpoint["hyper_parameters"]["config"]
-
         self.use_frame_coordinates = bool(
-            getattr(self.structure_config.model, "use_frame_coordinates", self.structure_config.model.output_dim == 9)
+            getattr(self.structure_config.model, "use_frame_coordinates")
         )
 
         output_dim = 9 if self.use_frame_coordinates else 3

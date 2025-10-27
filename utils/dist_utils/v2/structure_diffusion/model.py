@@ -147,10 +147,7 @@ class StructureViT(nn.Module):
         self.distance_embedding = DistanceMatrixEmbedding(in_channels, embed_dim)
         
         # Positional encoding (learnable or sinusoidal)
-        if self.use_sinusoidal_pos_embed:
-            self.pos_embed = None
-        else:
-            self.pos_embed = nn.Parameter(torch.randn(1, self.max_seq_len, embed_dim) * 0.02)
+        self.pos_embed = None
         
         # Transformer blocks
         self.blocks = nn.ModuleList([
