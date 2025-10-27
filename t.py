@@ -7,8 +7,8 @@ ray.init(log_to_driver=True)
 
 
 step1_pickle(
-    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/part_00",
-    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-00",
+    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/part_01",
+    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-01",
     dataset_name="afdb",
     clear=True, # for afdb only
     max_concurrent=3000,
