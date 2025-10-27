@@ -228,6 +228,12 @@ class DistMatrixTokenizer(ProteinTokenizer):
         structure_checkpoint = torch.load(self.structure_ckpt_path, map_location=map_location, weights_only=False)
         self.structure_config = structure_checkpoint["hyper_parameters"]["config"]
 
+        self.use_frame_coordinates = bool(
+            getattr(self.structure_config.model, "use_frame_coordinates", self.structure_config.model.output_dim == 9)
+        )
+
+        output_dim = 9 if self.use_frame_coordinates else 3
+
         self.structure_model = StructurePredictionModel(
             in_channels=self.structure_config.model.in_channels,
             embed_dim=self.structure_config.model.embed_dim,
@@ -235,7 +241,8 @@ class DistMatrixTokenizer(ProteinTokenizer):
             num_heads=self.structure_config.model.num_heads,
             mlp_ratio=self.structure_config.model.mlp_ratio,
             dropout=self.structure_config.model.dropout,
-            output_dim=self.structure_config.model.output_dim,
+            use_frame_coordinates=self.use_frame_coordinates,
+            output_dim=output_dim,
         )
 
         structure_state_prefix = "model."
@@ -273,29 +280,25 @@ class DistMatrixTokenizer(ProteinTokenizer):
             indices_list, batch_first=True, padding_value=-100
         )
         padding_mask = (batch_indices == -100).long()
+
         return {
             "batch_token_ids": batch_indices,
+            "batch_padding_mask": padding_mask,
         }
 
     @torch.no_grad()
     def batch_decode(self, batch_token_ids: torch.Tensor, **kwargs) -> list[OpenfoldProtein]:
-        warnings.warn("`batch_decode` is not fully parallel, just call `decode`.")
-        # before calling, -100 should be set for right-padding tokens
-        # construct batch_length from batch_token_ids(-100 is set)
-        
-        batch_length = (batch_token_ids != -100).sum(dim=1) # [B]
-        if 'batch_protein_length' not in kwargs:
-            warnings.warn("Expect 'batch_protein_length' in kwargs for decoding. Assuming no patch-padding.")
-            raise NotImplementedError()
-        
-        batch_protein_lengths = kwargs.get('batch_protein_length', None)
-        if batch_protein_lengths is None:
+        # support batch decode, thus padding_mask is expected(in kwargs)
+        batch_lengths = kwargs.get('batch_lengths', None)
+        protein_lengths = kwargs.get('protein_lengths', None)
+        if batch_lengths is None or protein_lengths is None:
             raise ValueError("batch_lengths and protein_lengths must be provided for batch decoding.")
         batch_size = batch_token_ids.shape[0]
         decoded_proteins = []
         for i in range(batch_size):
-            token_ids = batch_token_ids[i][:batch_length[i]]
-            protein_length = batch_protein_lengths[i]
+            batch_length = batch_lengths[i]
+            token_ids = batch_token_ids[i][:batch_length]
+            protein_length = protein_lengths[i]
             protein = self.decode(token_ids, protein_length=protein_length)
             decoded_proteins.append(protein)
         return decoded_proteins
@@ -363,14 +366,20 @@ class DistMatrixTokenizer(ProteinTokenizer):
         trimmed_distance = reconstructed[:, : protein_length, : protein_length, :]
 
         distance_matrix = trimmed_distance.squeeze(0)
-        predicted_coords = self.structure_model(distance_matrix)
-        predicted_coords = predicted_coords * self.std_data
-
         residue_atom37_coord = torch.zeros((protein_length, 37, 3), device=self.device)
         residue_atom37_mask = torch.zeros((protein_length, 37), device=self.device)
-        ca_index = atom_order["CA"]
-        residue_atom37_coord[:, ca_index, :] = predicted_coords
-        residue_atom37_mask[:, ca_index] = 1.0
+
+        if self.use_frame_coordinates:
+            predicted_frames = self.structure_model(distance_matrix) * self.std_data
+            frame_indices = [atom_order["N"], atom_order["CA"], atom_order["C"]]
+            for atom_idx, frame_index in enumerate(frame_indices):
+                residue_atom37_coord[:, frame_index, :] = predicted_frames[:, atom_idx, :]
+                residue_atom37_mask[:, frame_index] = 1.0
+        else:
+            predicted_ca = self.structure_model(distance_matrix) * self.std_data
+            ca_index = atom_order["CA"]
+            residue_atom37_coord[:, ca_index, :] = predicted_ca
+            residue_atom37_mask[:, ca_index] = 1.0
         backbone = OpenfoldBackbone.from_dict(
             dict(
                 residue_atom37_coord=residue_atom37_coord,

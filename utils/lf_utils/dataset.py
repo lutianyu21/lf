@@ -85,6 +85,19 @@ def _stream_iterate_swissprot(swiss_dir: str | Path) -> Iterator[Path]:
     # e.g. AF-A0A0A0MRZ7-F1-model_v4.cif.gz
     for cif_path in swiss_dir.glob("AF-*-F1-model_v4.cif.gz"):
         yield cif_path
+        
+def _stream_iterate_rcsb(rcsb_dir: str | Path) -> Iterator[Path]:
+    if isinstance(rcsb_dir, str): rcsb_dir = Path(rcsb_dir)
+    # if file_list.txt exists, read from it
+    file_list_path = rcsb_dir / "file_list.txt"
+    if file_list_path.exists():
+        with open(file_list_path, 'r') as f:
+            for line in f:
+                cif_path = Path(line.strip())
+                yield cif_path
+    else:
+        for cif_path in rcsb_dir.glob("*.cif"):
+            yield cif_path
 
 
 @ray.remote
@@ -125,8 +138,9 @@ def step1_pickle(
     total_count = 0
     # TODO convert generator to support others
     stream_iterate = {
-        "afdb":                 _stream_iterate_afdb,
-        "swissprot_cif_v4":     _stream_iterate_swissprot,
+        "rcsb":             _stream_iterate_rcsb,
+        "afdb":             _stream_iterate_afdb,
+        "swissprot_v4":     _stream_iterate_swissprot,
     }[dataset_name]
     for p in stream_iterate(src_dir):
         futures.append(process_file.remote(p, dst_dir, clear))
@@ -158,12 +172,14 @@ def step1_pickle(
                 logger.error(f"[uid={total_count}] Failed: {res[1]} Error: {res[2]}")
                 failures.append(res[1])
         results.extend(done_results)
-   
+    
+    failures_file = dst_dir / "failures.txt"
+    if failures_file.exists(): failures_file.unlink()
     if failures:
         with open(dst_dir/'failures.txt', "w") as f:
             for item in failures:
                 f.write(f"{item}\n")
-        logger.info(f"Total failed items: {len(failures)}. Saved to {dst_dir/'failures.txt'}")
+        logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
     logger.info(f"All files processed. Total submitted: {total_count}")
 
 
@@ -273,8 +289,6 @@ def step2_parquet(
         if batch is None:
             cpu_workers_done += 1
             if cpu_workers_done >= num_cpu_workers:
-                if parquet_writer is not None:
-                    parquet_writer.close()
                 break
             else:
                 continue

@@ -158,20 +158,37 @@ gemmi_checker = {
 def _gemmi_parser(
     p: Path,
     protocol: Dict[str, bool] = gemmi_default_protocol,
-    subchains: List[str] | None = None,
-    subchains_flag: str = 'auth',
     verbose: bool = True,
 ) -> dict:
-    
-    if not p.exists():
-        if verbose:
-            raise ValueError(f'File {p} does not exist. Returns empty dict.')
+    # one can input: 7dz2.cif, 7dz2_C.cif, AF-<ID>.cif.gz
+    # assumption: @ indicates auth_chain_id, % indicates label_chain_id
+    p_copy = p
+    stem = p.name.strip('.gz').strip('.cif')
+    if '%' in stem:
+        subchains_flag = 'label'
+        subchains: List[str] | None = stem.split('%')
+        if len(subchains) > 1:
+            pure_name = subchains[0]
+            subchains = subchains[1:]
+            p = p.parent / (pure_name + ''.join(p.suffixes))
         else:
-            print(f'File {p} does not exist. Returns empty dict.')
-            return {}
+            subchains = None
+    elif '@' in stem:
+        subchains_flag = 'auth'
+        subchains: List[str] | None = stem.split('@')
+        if len(subchains) > 1:
+            pure_name = subchains[0]
+            subchains = subchains[1:]
+            p = p.parent / (pure_name + ''.join(p.suffixes))
+        else:
+            subchains = None
+    else:
+        subchains_flag = 'auth'
+        subchains = None
     
     # Most possibly due to non-standrd .cif format
     try:
+        # p or p_copy
         structure = gemmi.read_structure(str(p))
     except Exception as e:
         if verbose:
@@ -259,9 +276,6 @@ def _gemmi_parser(
         return chain2feature
 
 
-
-
-
 class OpenfoldBackbone:
     
     # represents a concatenated bakcbone chains
@@ -333,37 +347,9 @@ class OpenfoldProtein:
     def from_file(cls, path: str | Path, verbose: bool = True):
         if isinstance(path, str): path = Path(path)
         assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb', '.gz'], f'Unsupported file type: {path.suffix}'
-
-        # one can input: 7dz2.cif, 7dz2_C.cif, AF-<ID>.cif.gz
-        # assumption: @ indicates auth_chain_id, % indicates label_chain_id
         stem = path.name.strip('.gz').strip('.cif')
-        
-        if '%' in stem:
-            subchains: List[str] | None = stem.split('%')
-            subchains_flag = 'label'
-            if len(subchains) > 1:
-                pure_name = subchains[0]
-                subchains = subchains[1:]
-                path = path.parent / (pure_name + ''.join(path.suffixes))
-            else:
-                subchains = None
-                
-        elif '@' in stem:
-            subchains: List[str] | None = stem.split('@')
-            subchains_flag = 'auth'
-            if len(subchains) > 1:
-                pure_name = subchains[0]
-                subchains = subchains[1:]
-                path = path.parent / (pure_name + ''.join(path.suffixes))
-            else:
-                subchains = None
-        
-        else:
-            subchains = None
-            subchains_flag = 'auth'
-
         instance = cls()
-        gemmi_out = _gemmi_parser(path, subchains=subchains, subchains_flag=subchains_flag, verbose=verbose)
+        gemmi_out = _gemmi_parser(path, verbose=verbose)
         if gemmi_out == {}:
             instance.entry = 'empty'
             return instance

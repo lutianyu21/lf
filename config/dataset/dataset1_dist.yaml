@@ -1,3 +1,2 @@
 dataset_type:   dataset1_dist
-dataset_train:  /GenSIvePFS/users/lutianyu/lf/data/dataset1_dist_v2.jsonl
-dataset_test:   /GenSIvePFS/users/lutianyu/lf/data/cameo2022_dist_v2.jsonl
+dataset_path:   /GenSIvePFS/users/lutianyu/lf/data/dist_v2.parquet

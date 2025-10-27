@@ -11,13 +11,17 @@
 *.log
 *.cif
 *.jsonl
+*.parquet
 *.csv
 *.vscode
+*.cache
 
 # slink
-data/pickle
-data/rcsb_mmcif
-data/swissprot_cif_v4
+**/rcsb
+**/swissprot_v4
+**/cameo2022
+**/pickle
+**/parquet
 
 /cache
 /pytest

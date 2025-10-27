@@ -1,3 +1,4 @@
+from math import log
 from typing import Any, Dict, Optional, List, Text, Tuple, cast
 import os
 from pathlib import Path
@@ -230,9 +231,9 @@ class LFTrainer(Trainer):
         # step2: collect proteins 
         pdb_name, split = inputs["pdb_name"], inputs["split"]
         template = {
-            "afdb_swissprot":   "data/swissprot_cif_v4/{x}.cif.gz",
-            "pdb":              "data/rcsb_mmcif/{x}.cif",
-            "cameo2022":        "data/rcsb_mmcif/{x}.cif"
+            "afdb_swissprot":   "data/raw/swissprot_v4/{x}.cif.gz",
+            "pdb":              "data/raw/rcsb/{x}.cif",
+            "cameo2022":        "data/raw/rcsb/{x}.cif"
         }
         protein_collect = [
             OpenfoldProtein.from_file(Path(__file__).parent/template[y].format(x=x)).to(device)
@@ -385,48 +386,39 @@ def main(config: DictConfig):
             model.config.pad_token_id = text_tokenizer.pad_token_id
             model.resize_token_embeddings(text_tokenizer.vocab_size)
             
-    # monomeric dataset
+    # Update: we now loading dataset from parquet files
     features = Features({
-        'pdb_name': Value('string'),
-        'split': Value('string'),
-        'text': Value('string'),
-        'prompt': Value('string'),
-        'seq_text': Value('string'),
-        'struct_text': Value('string'),
-        'seq_length': Value('int32'),
+        'split':        Value('string'),
+        'pdb_name':     Value('string'),
+        'plddt':        Value('float32'),
+        'text':         Value('string'),
+        'prompt':       Value('string'),
+        'seq_length':   Value('int32'),
         'struct_length': Value('int32'),
         'total_length': Value('int32'),
-        'oligomeric_count': Value('int32'),
-        'oligomeric_detail': Value('string'),
-        'coil_percent': Value('float32'),
-        'helix_percent': Value('float32'),
-        'strand_percent': Value('float32'),
-        'radius_gyration': Value('float32'),
-        'avg_plddt': Value('float32'),
     })
     
-    ds = load_dataset("json", data_files=config_dataset.dataset_train, split="train", features=features) # type: ignore
-    ds = ds.filter(lambda x: x['seq_length'] <= 512)            # type: ignore
-    
-    # here we construct a hybrid evaluation dataset
-    # including 100 items from split['test] and 100 items from split['train']
-    split = ds.train_test_split(test_size=100, seed=2025)      # type: ignore
-    train_dataset, eval_dataset = split['train'], split['test']
-    subsplit = train_dataset.train_test_split(test_size=100, seed=2025) # type: ignore
-    overfit_dataset = subsplit['test']
-    cameo_dataset: Any = load_dataset("json", data_files=config_dataset.dataset_test, split="train", features=features) # type: ignore
+    # TODO consider filtering, length? reoslution?
+    ds = load_dataset("parquet", data_files=config_dataset.dataset_path, split="train", features=features) # type: ignore
+    ds_dev = ds.filter(lambda x: x["split"] != "cameo2022")
+    ds_test = ds.filter(lambda x: x["split"] == "cameo2022")
+    dev = ds_dev.train_test_split(test_size=100, seed=2025)      # type: ignore
+    ds_train, ds_eval = dev['train'], dev['test']
+    overfit_dev = ds_train.train_test_split(test_size=100, seed=2025) # type: ignore
+    ds_overfit = overfit_dev['test']
     
     # however we need to add a new field 'dev' to distinguish them
     # for train 'dev' = 0, for overfit 'dev' = 1, for eval 'dev' = 2, for test 'dev' = 3
-    train_dataset = train_dataset.add_column("dev", [0] * len(train_dataset))    # type: ignore
-    overfit_dataset = overfit_dataset.add_column("dev", [1] * len(overfit_dataset)) # type: ignore
-    eval_dataset = eval_dataset.add_column("dev", [2] * len(eval_dataset))       # type: ignore
-    test_dataset = cameo_dataset.add_column("dev", [3] * len(cameo_dataset))     # type: ignore
+    ds_list = [ds_train, ds_overfit, ds_eval, ds_test]
+    for i in range(len(ds_list)):
+        ds_list[i] = ds_list[i].add_column("dev", [i] * len(ds_list[i]))  # type: ignore
+    ds_train, ds_overfit, ds_eval, ds_test = ds_list
+        
     logger.info(
-        f"""Datasets include: train items x{len(train_dataset)}; overfit items x{len(overfit_dataset)}; eval items x{len(eval_dataset)}; cameo2022 items x{len(test_dataset)};"""
+        f"""Datasets include: trainx{len(ds_train)}; overfitx{len(ds_overfit)}; evalx{len(ds_eval)}; cameo2022x{len(ds_test)};""" # type: ignore
     )
-    final_train_dataset = train_dataset
-    final_eval_dataset = datasets.concatenate_datasets([overfit_dataset, eval_dataset, test_dataset]) # type: ignore
+    train_dataset = ds_train
+    eval_dataset = datasets.concatenate_datasets([ds_overfit, ds_eval, ds_test]) # type: ignore
     
     # training process
     model.train()
@@ -438,8 +430,8 @@ def main(config: DictConfig):
         train_collator=TextCollator(processor, eval_mode=False),
         eval_collator=TextCollator(processor, eval_mode=True),
         args=training_args,
-        train_dataset=final_train_dataset,
-        eval_dataset=final_eval_dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         compute_metrics=lf_metrics,
     )
     trainer.train()
