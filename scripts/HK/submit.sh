@@ -92,7 +92,7 @@ EOF
 echo "=== Cleaning previous builds ==="
 rm -r /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/build && \
 rm -r /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/openfold.egg-info && \
-rm attn_core_inplace_cuda.cpython-310-x86_64-linux-gnu.so
+rm /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/attn_core_inplace_cuda.cpython-310-x86_64-linux-gnu.so
 echo "================================"
 
 
