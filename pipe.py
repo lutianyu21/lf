@@ -397,7 +397,7 @@ def main(config: DictConfig):
         'total_length': Value('int32'),
     })
     
-    # TODO consider filtering, length? reoslution?
+    # TODO consider filtering, length? reoslution? 
     ds = load_dataset("parquet", data_files=config_dataset.dplm_dataset_path, split="train", features=features) # type: ignore
     ds_dev = ds.filter(lambda x: x["split"] != "cameo2022")
     ds_test = ds.filter(lambda x: x["split"] == "cameo2022")
@@ -407,9 +407,9 @@ def main(config: DictConfig):
     ds_overfit = overfit_dev['test']
     
     # filter with plddt > 90
-    ds = load_dataset("parquet", data_files=config_dataset.afdb_dataset_path, split="train", features=features) # type: ignore
-    ds = ds.filter(lambda x: x["plddt"] >= 90.0)
-    ds_train = datasets.concatenate_datasets([ds_train, ds]) # type: ignore
+    # ds = load_dataset("parquet", data_files=config_dataset.afdb_dataset_path, split="train", features=features) # type: ignore
+    # ds = ds.filter(lambda x: x["plddt"] >= 90.0)
+    # ds_train = datasets.concatenate_datasets([ds_train, ds]) # type: ignore
     
     # however we need to add a new field 'dev' to distinguish them
     # for train 'dev' = 0, for overfit 'dev' = 1, for eval 'dev' = 2, for test 'dev' = 3
@@ -418,9 +418,7 @@ def main(config: DictConfig):
         ds_list[i] = ds_list[i].add_column("dev", [i] * len(ds_list[i]))  # type: ignore
     ds_train, ds_overfit, ds_eval, ds_test = ds_list
         
-    logger.info(
-        f"""Datasets include: trainx{len(ds_train)}; overfitx{len(ds_overfit)}; evalx{len(ds_eval)}; cameo2022x{len(ds_test)};""" # type: ignore
-    )
+    
     train_dataset = ds_train
     eval_dataset = datasets.concatenate_datasets([ds_overfit, ds_eval, ds_test]) # type: ignore
     
