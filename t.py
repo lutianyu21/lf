@@ -7,7 +7,19 @@ from ray.util.queue import Queue
 if not ray.is_initialized():
     ray.init(address="auto")
 queue = Queue(maxsize=200)
-queue_ref = ray.put(queue)
+
+# HK version
+step2_parquet(
+    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-03",
+    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-03",
+    tokenizer_name='dist',
+    num_cpu_workers=10,
+    num_gpu_workers=8,
+    batch_size=6000,
+    part_size=120000,
+    queue=queue,
+)
+
 
 
 # step1_pickle(
@@ -29,17 +41,6 @@ queue_ref = ray.put(queue)
 # )
 
 
-# HK version
-step2_parquet(
-    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-03",
-    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-03",
-    tokenizer_name='dist',
-    num_cpu_workers=10,
-    num_gpu_workers=8,
-    batch_size=6000,
-    part_size=120000,
-    queue_ref=queue_ref,
-)
 
 
 

@@ -233,8 +233,7 @@ class PickleWorker:
         self.group_id = group_id
         self.batch_size = batch_size
 
-    def fn(self, queue_ref: ray.ObjectRef):
-        out_queue = ray.get(queue_ref)
+    def fn(self, out_queue: Queue):
         batch = []
         count = 0 
         with os.scandir(self.root) as it:
@@ -265,7 +264,7 @@ def step2_parquet(
     src_dir: str | Path,
     dst_dir: str | Path,
     tokenizer_name: str,
-    queue_ref: ray.ObjectRef,
+    queue: Queue,
     num_cpu_workers: int = 8,
     num_gpu_workers: int = 4,
     batch_size: int = 64,
@@ -277,13 +276,12 @@ def step2_parquet(
     
     seed_everything(2025)
     
-    queue = ray.get(queue_ref)
     gpu_workers = [GPUWorker.remote(tokenizer_name) for _ in range(num_gpu_workers)]
     gpu_workers_max = num_gpu_workers * 2
     cpu_workers = [PickleWorker.remote(str(src_dir), batch_size, num_cpu_workers, i) for i in range(num_cpu_workers)]
     cpu_workers_done = 0
     for w in cpu_workers:
-        w.fn.remote(queue_ref)  # type: ignore
+        w.fn.remote(queue)  # type: ignore
     
     bid = 0
     current_part = 0
