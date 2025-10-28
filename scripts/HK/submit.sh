@@ -69,6 +69,27 @@ pip config set global.index-url https://pypi.org/simple
 pip config list
 
 PIP=/root/miniconda3/envs/qwen3/bin/pip
+PACKAGES=("colorlog" "ray" "einx")
+for pkg in "${PACKAGES[@]}"; do
+    if ! "$PIP" show "$pkg" > /dev/null 2>&1; then
+        "$PIP" install "$pkg" \
+            --trusted-host pypi.org \
+            --trusted-host pypi.python.org \
+            --trusted-host files.pythonhosted.org
+    else
+        echo "$pkg installed, skip"
+    fi
+done
+
+LOCAL_PATH="/GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold"
+if ! "$PIP" show openfold > /dev/null 2>&1; then
+    "$PIP" install -e "$LOCAL_PATH" \
+        --trusted-host pypi.org \
+        --trusted-host pypi.python.org \
+        --trusted-host files.pythonhosted.org
+else
+    echo "openfold installed, skip"
+fi
 $PIP install colorlog ray einx \
     -e /GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold \
     --trusted-host pypi.org \
