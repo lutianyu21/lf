@@ -29,6 +29,7 @@ from .text_tokenizer import TextTokenizer
 __all__ = [
     "step1_pickle",
     "step2_parquet",
+    "step3_merge",
 ]
 
 logger = logging.getLogger(__name__)
@@ -349,3 +350,36 @@ def step2_parquet(
         parquet_writer.close()
     logger.info(f"🏁 All batches processed and saved to {dst_dir}")
     
+    
+def step3_merge(
+    src_dir: Path | str,
+    dst_dir: Path | str,
+    add_split: str | None,
+):
+    if isinstance(src_dir, str): src_dir = Path(src_dir)
+    if isinstance(dst_dir, str): dst_dir = Path(dst_dir)
+    # merge all parquet files into one(add split column if needed)
+    all_tables = []
+    for p in src_dir.glob("dataset_part*.parquet"):
+        try:
+            table = pyarrow.parquet.read_table(str(p))
+        except Exception as e:
+            logger.error(f"Failed to read {p}: {e}")
+            continue
+        if add_split is not None:
+            split_array = pyarrow.array([add_split] * table.num_rows)
+            table = table.append_column("split", split_array)
+        all_tables.append(table)
+        logger.info(f"Read {p} with {table.num_rows} rows.")
+    merged_table = pyarrow.concat_tables(all_tables)
+    
+    # show 5 exmaples of items
+    logger.info(f"Merged table has {merged_table.num_rows} rows.")
+    for i in range(min(5, merged_table.num_rows)):
+        item = merged_table.slice(i, 1).to_pydict()
+        logger.info(f"Example {i}: {item}")
+        
+    # save merged table
+    dst_file = dst_dir / "dataset_merged.parquet"
+    pyarrow.parquet.write_table(merged_table, str(dst_file), compression="snappy")
+    logger.info(f"Saved merged parquet to {dst_file}")
