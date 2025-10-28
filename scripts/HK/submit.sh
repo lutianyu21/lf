@@ -91,7 +91,10 @@ EOF
 
 echo "=== Cleaning previous builds ==="
 rm -r /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/build && \
-rm -r /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/openfold.egg-info &&
+rm -r /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/openfold.egg-info && \
+rm attn_core_inplace_cuda.cpython-310-x86_64-linux-gnu.so
+echo "================================"
+
 
 # Check and create container if not exists on each node(requires few resources, nxpxc = nx1x1):
 echo "=== Checking and creating container [$CONTAINER_NAME] on all nodes ==="
