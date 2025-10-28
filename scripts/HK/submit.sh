@@ -70,6 +70,7 @@ pip config list
 
 PIP=/root/miniconda3/envs/qwen3/bin/pip
 $PIP install colorlog ray einx \
+    -e /GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold \
     --trusted-host pypi.org \
     --trusted-host pypi.python.org \
     --trusted-host files.pythonhosted.org
