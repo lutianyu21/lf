@@ -68,6 +68,7 @@ pip config list
 pip config set global.index-url https://pypi.org/simple
 pip config list
 
+rm -r /GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/build
 PIP=/root/miniconda3/envs/qwen3/bin/pip
 $PIP install colorlog ray einx \
     -e /GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold \
@@ -76,6 +77,7 @@ $PIP install colorlog ray einx \
     --trusted-host files.pythonhosted.org
 
 echo "=== Runnig task ==="
+export TMPDIR=/GenSIvePFS/users/lutianyu/lf/tmp
 cd /GenSIvePFS/users/lutianyu/lf
 conda run -n qwen3 torchrun \
     --nnodes=$SLURM_NNODES \
