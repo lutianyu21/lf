@@ -70,7 +70,6 @@ pip config list
 
 PIP=/root/miniconda3/envs/qwen3/bin/pip
 $PIP install colorlog ray einx \
-    -e /GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold \
     --trusted-host pypi.org \
     --trusted-host pypi.python.org \
     --trusted-host files.pythonhosted.org
@@ -103,7 +102,7 @@ fi
 # Export variable in the container:
 numactl --cpunodebind=0 --membind=0 srun enroot start -r \
     --mount /home/projects/protein/lutianyu:/GenSIvePFS/users/lutianyu \
-    --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/rcsb_mmcif \
+    --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/raw/rcsb_mmcif \
     -w $CONTAINER_NAME \
     -- /bin/bash -c "
     export SLURM_JOB_ID=$SLURM_JOB_ID; \
