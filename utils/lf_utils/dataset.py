@@ -1,4 +1,4 @@
-from typing import Any, Iterator, List
+from typing import Any, Dict, Iterator, List
 from pathlib import Path
 import tarfile
 import tempfile
@@ -7,6 +7,7 @@ import colorlog
 import pickle
 import os
 import shutil
+import pandas as pd
 import pyarrow
 import pyarrow.parquet
 import time
@@ -25,6 +26,7 @@ from .protein_processor import ProteinProcessor
 from .protein_tokenizer import DPLMProteinTokenizer
 from .protein_tokenizer import DistMatrixTokenizer
 from .text_tokenizer import TextTokenizer
+
 
 __all__ = [
     "step1_pickle",
@@ -49,17 +51,12 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 logger.propagate = False
 
-
-queue = Queue(maxsize=200)
-queue_ref = ray.put(queue)
-
 def seed_everything(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    
 
 def _stream_iterate_afdb(tax_dir: str | Path) -> Iterator[Path]:
     if isinstance(tax_dir, str): tax_dir = Path(tax_dir)
@@ -187,170 +184,113 @@ def step1_pickle(
     logger.info(f"All files processed. Total submitted: {total_count}")
 
 
+
 @ray.remote(num_gpus=1)
 class GPUWorker:
     def __init__(self, tokenizer_name: str):
-        from .protein_processor import ProteinProcessor
         gpu_ids = ray.get_gpu_ids()
         if not gpu_ids:
             raise RuntimeError("No GPU assigned to this actor")
         self.device = torch.device(f"cuda:0")
-        # lazy initilaize
         self.tokenizer_name = tokenizer_name
         self.processor = None
 
-    def fn(self, batch: List[OpenfoldProtein]):
-        if self.processor is None:
-            struct_tokenizer = {
-                "dplm": DPLMProteinTokenizer,
-                "dist": DistMatrixTokenizer,
-            }[self.tokenizer_name].get_instance()
-            text_tokenizer = TextTokenizer(
-                tokenizer_object=Tokenizer.from_file(str(Path(__file__).parent/'aatype_tokenizer.json')),
-                pad_token='<|pad|>',
-                bos_token='<|bos|>',
-                eos_token='<|eos|>',
-                padding_side='left',
-                struct_vsz=struct_tokenizer.vsz,
-            )
-            self.processor = ProteinProcessor(
-                tokenizer=text_tokenizer,
-                struct_tokenizer=struct_tokenizer,
-            ).to(self.device)
-        return self.processor.preprocess_dataset(batch, verbose=False)
+    def _init_processor(self):
+        """Lazy initialize processor only once per actor."""
+        if self.processor is not None: return
+        struct_tokenizer = {
+            "dplm": DPLMProteinTokenizer,
+            "dist": DistMatrixTokenizer,
+        }[self.tokenizer_name].get_instance()
+        text_tokenizer = TextTokenizer(
+            tokenizer_object=Tokenizer.from_file(
+                str(Path(__file__).parent / "aatype_tokenizer.json")
+            ),
+            pad_token="<|pad|>",
+            bos_token="<|bos|>",
+            eos_token="<|eos|>",
+            padding_side="left",
+            struct_vsz=struct_tokenizer.vsz,
+        )
 
+        self.processor = ProteinProcessor(
+            tokenizer=text_tokenizer,
+            struct_tokenizer=struct_tokenizer,
+        ).to(self.device)
 
-@ray.remote
-class PickleWorker:
-    def __init__(
-        self,
-        root: str,
-        batch_size: int,
-        group_size: int,
-        group_id: int,
-    ):
-        self.root = Path(root)
-        self.group_size = group_size
-        self.group_id = group_id
-        self.batch_size = batch_size
-
-    def fn(self, out_queue: Queue):
-        batch = []
-        count = 0 
-        with os.scandir(self.root) as it:
-            for entry in it:
-                if not entry.is_file() or not entry.name.endswith(".pkl"):
-                    continue
-                if count % self.group_size != self.group_id:
-                    count += 1
-                    continue
-                count += 1
-                try:
-                    with open(entry.path, "rb") as f:
-                        obj = pickle.load(f)
-                    batch.append(obj)
-                    logger.debug(f"Reading {entry.path}...")
-                    if len(batch) >= self.batch_size:
-                        out_queue.put(batch)
-                        batch = []
-                except Exception as e:
-                    logger.warning(f"Failed to read {entry.path}: {e}")
-        if batch:
-            out_queue.put(batch)
-        logger.info(f"[gid={self.group_id}] Finished reading files.")
-        out_queue.put(None)
+    def process_bytes(self, batch: List[Any]) -> List[Dict[str, Any]]:
+        self._init_processor()
+        proteins = []
+        for prot in batch:
+            prot = OpenfoldProtein.from_dict(prot.as_py())
+            proteins.append(prot)
+        return self.processor.preprocess_dataset(proteins, verbose=False) # type: ignore
 
 
 def step2_parquet(
     src_dir: str | Path,
     dst_dir: str | Path,
     tokenizer_name: str,
-    queue: Queue,
-    num_cpu_workers: int = 8,
     num_gpu_workers: int = 4,
     batch_size: int = 64,
-    part_size: int = 100000,
 ):
     if isinstance(src_dir, str): src_dir = Path(src_dir)
     if isinstance(dst_dir, str): dst_dir = Path(dst_dir)
     dst_dir.mkdir(parents=True, exist_ok=True)
+    workers = [GPUWorker.remote(tokenizer_name) for _ in range(num_gpu_workers)]
     
-    seed_everything(2025)
+    def decode_bytes_batch(batch):
+        byte_list = batch["bytes"].to_pylist()
+        dict_list = [pickle.loads(b).to_dict() for b in byte_list]
+        return {"proteins": dict_list}
     
-    gpu_workers = [GPUWorker.remote(tokenizer_name) for _ in range(num_gpu_workers)]
-    gpu_workers_max = num_gpu_workers * 2
-    cpu_workers = [PickleWorker.remote(str(src_dir), batch_size, num_cpu_workers, i) for i in range(num_cpu_workers)]
-    cpu_workers_done = 0
-    for w in cpu_workers:
-        w.fn.remote(queue)  # type: ignore
+    ds = ray.data.read_binary_files(str(src_dir), include_paths=False)
+    ds = ds.map_batches(
+        decode_bytes_batch,
+        batch_size=batch_size,
+        batch_format=None,
+    )
     
-    bid = 0
-    current_part = 0
-    current_part_size = 0
-    parquet_writer = None
-    time_start = time.time()
-    pending_refs = []
-    while True:
-        batch = queue.get()
-        if batch is None:
-            cpu_workers_done += 1
-            if cpu_workers_done >= num_cpu_workers:
-                break
-            else:
-                continue
-            
-        # submit batch to GPU worker
-        gpu_worker= gpu_workers[bid % num_gpu_workers]
-        ref = gpu_worker.fn.remote(batch) # type: ignore
-        pending_refs.append(ref)
-        bid += 1
-            
-        if len(pending_refs) >= gpu_workers_max:
-            ready, pending_refs = ray.wait(pending_refs, num_returns=1)
+    inflight = []
+    counter = 0
+    part_idx = 0
+    start_time = time.time()
+    for batch in ds.iter_batches(batch_size=batch_size, batch_format=None):
+        worker = workers[counter % num_gpu_workers]
+        ref = worker.process_bytes.remote(batch['proteins']) # type: ignore
+        inflight.append(ref)
+        counter += 1
+        if len(inflight) >= 2 * num_gpu_workers:
+            ready, inflight = ray.wait(inflight, num_returns=1, fetch_local=False)
             result = ray.get(ready[0])
-            elapsed = time.time() - time_start
-            time_start = time.time()
-            logger.info(f"[{int(elapsed)}s] Processed batch of {len(result)} items (pending={len(pending_refs)})")
+            df = pd.DataFrame(result)
+            out_path = dst_dir / f"dataset_part{part_idx:04d}.parquet"
+            df.to_parquet(out_path, index=False)
+            elapsed_time = time.time() - start_time
+            start_time = time.time()
+            logger.info(f"[✅ {int(elapsed_time)}s] Saved {len(df)} rows to {out_path.name}")
+            part_idx += 1
+            del df
+            del result
 
-            table = pyarrow.Table.from_pylist(result)
-            if parquet_writer is None:
-                dst_file = dst_dir / f"dataset_part{current_part}.parquet"
-                parquet_writer = pyarrow.parquet.ParquetWriter(str(dst_file), table.schema, compression="snappy")
-            parquet_writer.write_table(table)
-            current_part_size += len(result)
-            
-            if current_part_size >= part_size:
-                parquet_writer.close()
-                logger.info(f"✅ Part {current_part} finished with {current_part_size} entries.")
-                current_part += 1
-                current_part_size = 0
-                parquet_writer = None
-                
-    logger.info("⌛ Waiting for remaining GPU tasks...")
-    while pending_refs:
-        ready, pending_refs = ray.wait(pending_refs, num_returns=1)
+    while inflight:
+        ready, inflight = ray.wait(inflight, num_returns=1, fetch_local=False)
         result = ray.get(ready[0])
-        elapsed = time.time() - time_start
-        time_start = time.time()
-        logger.info(f"[{int(elapsed)}s] Processed batch of {len(result)} items (pending={len(pending_refs)})")
-        table = pyarrow.Table.from_pylist(result)
-        if parquet_writer is None:
-            dst_file = dst_dir / f"dataset_part{current_part}.parquet"
-            parquet_writer = pyarrow.parquet.ParquetWriter(str(dst_file), table.schema, compression="snappy")
-        parquet_writer.write_table(table)
-        current_part_size += len(result)
-        if current_part_size >= part_size:
-            parquet_writer.close()
-            logger.info(f"✅ Part {current_part} finished with {current_part_size} entries.")
-            current_part += 1
-            current_part_size = 0
-            parquet_writer = None
-    
-    if parquet_writer is not None:
-        parquet_writer.close()
-    logger.info(f"🏁 All batches processed and saved to {dst_dir}")
-    
-    
+        df = pd.DataFrame(result)
+        out_path = dst_dir / f"dataset_part{part_idx:04d}.parquet"
+        df.to_parquet(out_path, index=False)
+        elapsed_time = time.time() - start_time
+        start_time = time.time()
+        logger.info(f"[✅ {int(elapsed_time)}s] Saved {len(df)} rows to {out_path.name}")
+        part_idx += 1
+        del df
+        del result
+
+    logger.info("✅ All batches processed successfully.")
+
+
+
+
 def step3_merge(
     src_dir: Path | str,
     dst_dir: Path | str,
@@ -373,12 +313,9 @@ def step3_merge(
         logger.info(f"Read {p} with {table.num_rows} rows.")
     merged_table = pyarrow.concat_tables(all_tables)
     
-    # show 5 exmaples of items
-    logger.info(f"Merged table has {merged_table.num_rows} rows.")
-    for i in range(min(5, merged_table.num_rows)):
-        item = merged_table.slice(i, 1).to_pydict()
-        logger.info(f"Example {i}: {item}")
-        
+    # log merged table info
+    logger.info(f"Merged table has {merged_table.num_rows} rows. Columns: {merged_table.column_names}")
+  
     # save merged table
     dst_file = dst_dir / "dataset_merged.parquet"
     pyarrow.parquet.write_table(merged_table, str(dst_file), compression="snappy")

@@ -173,6 +173,7 @@ class ProteinProcessor(ProcessorMixin):
     
     
     def preprocess_dataset(self, batch: List[OpenfoldProtein], verbose: bool = True) -> List[dict]:
+        batch = [b.to(self.device) for b in batch]
         out = self.struct_tokenizer(batch)
         results = []
         batch_token_ids = out['batch_token_ids']                # [B, L]

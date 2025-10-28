@@ -102,7 +102,7 @@ fi
 
 # Export variable in the container:
 numactl --cpunodebind=0 --membind=0 srun enroot start -r \
-    --mount /home/projects/protein/lutianyu/lf:/GenSIvePFS/users/lutianyu/lf \
+    --mount /home/projects/protein/lutianyu:/GenSIvePFS/users/lutianyu \
     --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/rcsb_mmcif \
     -w $CONTAINER_NAME \
     -- /bin/bash -c "

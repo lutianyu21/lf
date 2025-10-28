@@ -368,14 +368,29 @@ class OpenfoldProtein:
     def from_dict(cls, feature_in: Dict[str, Any]):
         instance = cls()
         instance.entry = feature_in.get('entry', 'unknown')
-        instance.residue_atom37_coord = feature_in['residue_atom37_coord']
-        instance.residue_atom37_mask = feature_in['residue_atom37_mask']
-        instance.residue_mask = feature_in['residue_mask']
-        instance.residue_aatype = feature_in['residue_aatype']
-        instance.residue_index = feature_in['residue_index']
-        instance.residue_chain_index = feature_in['residue_chain_index']
-        instance.residue_atom37_bfactor = feature_in['residue_atom37_bfactor']
+        fn = lambda k: feature_in[k] \
+            if isinstance(feature_in[k], torch.Tensor) \
+            else torch.from_numpy(feature_in[k])
+        instance.residue_atom37_coord = fn('residue_atom37_coord')
+        instance.residue_atom37_mask = fn('residue_atom37_mask')
+        instance.residue_mask = fn('residue_mask')
+        instance.residue_aatype = fn('residue_aatype')
+        instance.residue_index = fn('residue_index')
+        instance.residue_chain_index = fn('residue_chain_index')
+        instance.residue_atom37_bfactor = fn('residue_atom37_bfactor')
         return instance
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'entry': self.entry,
+            'residue_atom37_coord': self.residue_atom37_coord.cpu().numpy(),
+            'residue_atom37_mask': self.residue_atom37_mask.cpu().numpy(),
+            'residue_mask': self.residue_mask.cpu().numpy(),
+            'residue_aatype': self.residue_aatype.cpu().numpy(),
+            'residue_index': self.residue_index.cpu().numpy(),
+            'residue_chain_index': self.residue_chain_index.cpu().numpy(),
+            'residue_atom37_bfactor': self.residue_atom37_bfactor.cpu().numpy(),
+        }
     
     @classmethod
     def from_backbone(cls, backbone: OpenfoldBackbone):

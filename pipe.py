@@ -399,13 +399,18 @@ def main(config: DictConfig):
     })
     
     # TODO consider filtering, length? reoslution?
-    ds = load_dataset("parquet", data_files=config_dataset.dataset_path, split="train", features=features) # type: ignore
+    ds = load_dataset("parquet", data_files=config_dataset.dplm_dataset_path, split="train", features=features) # type: ignore
     ds_dev = ds.filter(lambda x: x["split"] != "cameo2022")
     ds_test = ds.filter(lambda x: x["split"] == "cameo2022")
     dev = ds_dev.train_test_split(test_size=100, seed=2025)      # type: ignore
     ds_train, ds_eval = dev['train'], dev['test']
     overfit_dev = ds_train.train_test_split(test_size=100, seed=2025) # type: ignore
     ds_overfit = overfit_dev['test']
+    
+    # filter with plddt > 90
+    ds = load_dataset("parquet", data_files=config_dataset.afdb_dataset_path, split="train", features=features) # type: ignore
+    ds = ds.filter(lambda x: x["plddt"] >= 90.0)
+    ds_train = datasets.concatenate_datasets([ds_train, ds]) # type: ignore
     
     # however we need to add a new field 'dev' to distinguish them
     # for train 'dev' = 0, for overfit 'dev' = 1, for eval 'dev' = 2, for test 'dev' = 3
