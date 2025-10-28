@@ -69,27 +69,6 @@ pip config set global.index-url https://pypi.org/simple
 pip config list
 
 PIP=/root/miniconda3/envs/qwen3/bin/pip
-PACKAGES=("colorlog" "ray" "einx")
-for pkg in "${PACKAGES[@]}"; do
-    if ! "$PIP" show "$pkg" > /dev/null 2>&1; then
-        "$PIP" install "$pkg" \
-            --trusted-host pypi.org \
-            --trusted-host pypi.python.org \
-            --trusted-host files.pythonhosted.org
-    else
-        echo "$pkg installed, skip"
-    fi
-done
-
-LOCAL_PATH="/GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold"
-if ! "$PIP" show openfold > /dev/null 2>&1; then
-    "$PIP" install -e "$LOCAL_PATH" \
-        --trusted-host pypi.org \
-        --trusted-host pypi.python.org \
-        --trusted-host files.pythonhosted.org
-else
-    echo "openfold installed, skip"
-fi
 $PIP install colorlog ray einx \
     -e /GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold \
     --trusted-host pypi.org \
@@ -97,7 +76,6 @@ $PIP install colorlog ray einx \
     --trusted-host files.pythonhosted.org
 
 echo "=== Runnig task ==="
-export TMPDIR=/GenSIvePFS/users/lutianyu/lf/tmp
 cd /GenSIvePFS/users/lutianyu/lf
 conda run -n qwen3 torchrun \
     --nnodes=$SLURM_NNODES \
@@ -110,6 +88,10 @@ conda run -n qwen3 torchrun \
 echo "=== torchrun command executed ==="
 EOF
 )
+
+echo "=== Cleaning previous builds ==="
+rm -r /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/build && \
+rm -r /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/openfold.egg-info &&
 
 # Check and create container if not exists on each node(requires few resources, nxpxc = nx1x1):
 echo "=== Checking and creating container [$CONTAINER_NAME] on all nodes ==="
