@@ -13,16 +13,24 @@ from utils.lf_utils.dataset import step3_merge
 ray.init()
 
 # HK version
+# step2_parquet(
+#     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-00",
+#     dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-00",
+#     tokenizer_name='dist',
+#     num_gpu_workers=8,
+#     batch_size=6000,
+#     chunk_size=12000,
+# )
+
 step2_parquet(
     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-00",
     dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-00",
     tokenizer_name='dist',
+    num_cpu_workers=100,
     num_gpu_workers=8,
     batch_size=6000,
-    chunk_size=12000,
+    part_size=12000,
 )
-
-
 
 
 # step3_merge(
