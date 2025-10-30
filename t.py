@@ -1,6 +1,5 @@
 # test build_dataset_from_entry
-from math import log
-
+import os
 from joblib import parallel_backend
 from utils.lf_utils import protein_processor, step1_pickle, step2_parquet
 from pathlib import Path
@@ -9,8 +8,7 @@ from ray.util.queue import Queue
 
 from utils.lf_utils.dataset import step3_merge
 
-if not ray.is_initialized():
-    ray.init(address="auto", log_to_driver=True)
+ray.init(address=os.environ["RAY_ADDRESS"], log_to_driver=True)
 # ray.init()
 
 # HK version

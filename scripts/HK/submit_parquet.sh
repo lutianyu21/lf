@@ -77,6 +77,8 @@ srun --nodes=1 --ntasks=1 -w $head_node enroot start -r \
     -- bash -c "
         cd /GenSIvePFS/users/lutianyu/lf;
         export RAY_DEDUP_LOGS=0;
+        export RAY_ADDRESS="ray://$head_ip:$port";
+        echo '=== Job Started ===';
         conda run -n qwen3 $PYTHON_BIN t.py;
         echo '=== Job Finished ===';
     "
