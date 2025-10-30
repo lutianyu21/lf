@@ -233,10 +233,12 @@ def step2_parquet(
     tokenizer_name: str,
     num_gpu_workers: int = 4,
     batch_size: int = 64,
+    chunk_size: int = 10000,  # ✅ 每次写入 parquet 的最小行数
 ):
     if isinstance(src_dir, str): src_dir = Path(src_dir)
     if isinstance(dst_dir, str): dst_dir = Path(dst_dir)
     dst_dir.mkdir(parents=True, exist_ok=True)
+
     workers = [GPUWorker.remote(tokenizer_name) for _ in range(num_gpu_workers)]
     
     def decode_bytes_batch(batch):
@@ -245,50 +247,62 @@ def step2_parquet(
         return {"proteins": dict_list}
     
     ds = ray.data.read_binary_files(str(src_dir), include_paths=False)
-    ds = ds.map_batches(
-        decode_bytes_batch,
-        batch_size=batch_size,
-        batch_format=None,
-    )
+    ds = ds.map_batches(decode_bytes_batch, batch_size=batch_size, batch_format=None)
     
     inflight = []
     counter = 0
     part_idx = 0
     start_time = time.time()
+    buffer = []  # ✅ 临时存储结果的缓冲区
+
+    # --- 主循环 ---
     for batch in ds.iter_batches(batch_size=batch_size, batch_format=None):
         worker = workers[counter % num_gpu_workers]
-        ref = worker.process_bytes.remote(batch['proteins']) # type: ignore
+        ref = worker.process_bytes.remote(batch['proteins'])  # type: ignore
         inflight.append(ref)
         counter += 1
+
+        # 控制并发数量
         if len(inflight) >= 2 * num_gpu_workers:
             ready, inflight = ray.wait(inflight, num_returns=1, fetch_local=False)
             result = ray.get(ready[0])
-            df = pd.DataFrame(result)
-            out_path = dst_dir / f"dataset_part{part_idx:04d}.parquet"
-            df.to_parquet(out_path, index=False)
+            buffer.extend(result)  # ✅ 累积结果
             elapsed_time = time.time() - start_time
             start_time = time.time()
-            logger.info(f"[✅ {int(elapsed_time)}s] Saved {len(df)} rows to {out_path.name}")
-            part_idx += 1
-            del df
-            del result
+            logger.info(f"[✅ {int(elapsed_time)}s] Collected {len(result)} rows")
 
+            # --- 当 buffer 达到指定大小，写出 parquet ---
+            if len(buffer) >= chunk_size:
+                df = pd.DataFrame(buffer)
+                out_path = dst_dir / f"dataset_part{part_idx:04d}.parquet"
+                df.to_parquet(out_path, index=False)
+                buffer.clear()
+                part_idx += 1
+
+    # --- 等待所有 inflight 任务完成 ---
     while inflight:
         ready, inflight = ray.wait(inflight, num_returns=1, fetch_local=False)
         result = ray.get(ready[0])
-        df = pd.DataFrame(result)
-        out_path = dst_dir / f"dataset_part{part_idx:04d}.parquet"
-        df.to_parquet(out_path, index=False)
+        buffer.extend(result)
         elapsed_time = time.time() - start_time
         start_time = time.time()
-        logger.info(f"[✅ {int(elapsed_time)}s] Saved {len(df)} rows to {out_path.name}")
+        logger.info(f"[✅ {int(elapsed_time)}s] Collected {len(result)} rows")
+
+        if len(buffer) >= chunk_size:
+            df = pd.DataFrame(buffer)
+            out_path = dst_dir / f"dataset_part{part_idx:04d}.parquet"
+            df.to_parquet(out_path, index=False)
+            buffer.clear()
+            part_idx += 1
+
+    # --- 写出剩余数据 ---
+    if buffer:
+        df = pd.DataFrame(buffer)
+        out_path = dst_dir / f"dataset_part{part_idx:04d}.parquet"
+        df.to_parquet(out_path, index=False)
         part_idx += 1
-        del df
-        del result
 
     logger.info("✅ All batches processed successfully.")
-
-
 
 
 def step3_merge(

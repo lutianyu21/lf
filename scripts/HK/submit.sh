@@ -111,7 +111,7 @@ fi
 # Export variable in the container:
 numactl --cpunodebind=0 --membind=0 srun enroot start -r \
     --mount /home/projects/protein/lutianyu:/GenSIvePFS/users/lutianyu \
-    --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/raw/rcsb_mmcif \
+    --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/raw/rcsb \
     -w $CONTAINER_NAME \
     -- /bin/bash -c "
     export SLURM_JOB_ID=$SLURM_JOB_ID; \
