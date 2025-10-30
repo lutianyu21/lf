@@ -240,6 +240,8 @@ class DistMatrixTokenizer(ProteinTokenizer):
             num_heads=self.structure_config.model.num_heads,
             mlp_ratio=self.structure_config.model.mlp_ratio,
             dropout=self.structure_config.model.dropout,
+            max_seq_len=self.structure_config.model.max_seq_len,
+            use_sinusoidal_pos_embed=self.structure_config.model.use_sinusoidal_pos_embed,
             use_frame_coordinates=self.use_frame_coordinates,
             output_dim=output_dim,
         )
@@ -362,14 +364,14 @@ class DistMatrixTokenizer(ProteinTokenizer):
         quantized = quantized.permute(0, 3, 1, 2).contiguous()
 
         reconstructed = self.model.decode(quantized)
-        trimmed_distance = reconstructed[:, : protein_length, : protein_length, :]
+        distance_matrix = reconstructed[:, : protein_length, : protein_length, :]
 
-        distance_matrix = trimmed_distance.squeeze(0)
         residue_atom37_coord = torch.zeros((protein_length, 37, 3), device=self.device)
         residue_atom37_mask = torch.zeros((protein_length, 37), device=self.device)
 
         if self.use_frame_coordinates:
             predicted_frames = self.structure_model(distance_matrix) * self.std_data
+            predicted_frames = predicted_frames.squeeze(0)  # [L, 3, 3]
             frame_indices = [atom_order["N"], atom_order["CA"], atom_order["C"]]
             for atom_idx, frame_index in enumerate(frame_indices):
                 residue_atom37_coord[:, frame_index, :] = predicted_frames[:, atom_idx, :]

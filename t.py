@@ -20,6 +20,9 @@ step2_parquet(
     batch_size=6000,
 )
 
+
+
+
 # step3_merge(
 #     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-02",
 #     dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-02",
@@ -36,13 +39,13 @@ step2_parquet(
 #     max_concurrent=3000,
 # )
 
-step2_parquet(
-    src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
-    dst_dir="/GenSIvePFS/users/lutianyu/lf/pytest/parquet/swissprot_cif_v4",
-    tokenizer_name='dist',
-    num_gpu_workers=2,
-    batch_size=6000,
-)
+# step2_parquet(
+#     src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
+#     dst_dir="/GenSIvePFS/users/lutianyu/lf/pytest/parquet/swissprot_cif_v4",
+#     tokenizer_name='dist',
+#     num_gpu_workers=2,
+#     batch_size=6000,
+# )
 
 
 
