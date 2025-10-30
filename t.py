@@ -8,7 +8,8 @@ from ray.util.queue import Queue
 
 from utils.lf_utils.dataset import step3_merge
 
-ray.init(address="auto", log_to_driver=True)
+if not ray.is_initialized():
+    ray.init(address="auto", log_to_driver=True)
 # ray.init()
 
 # HK version

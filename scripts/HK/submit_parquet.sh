@@ -60,7 +60,7 @@ for node in "${nodes[@]:1}"; do
         -w $CONTAINER_NAME \
         -- bash -c "
             $RAY_BIN stop >/dev/null 2>&1;
-            nohup $RAY_BIN start --address='$head_ip:$port' \
+            nohup $RAY_BIN start --address="$head_ip:$port" \
                 --num-cpus=224 --num-gpus=8 > /tmp/ray_worker.log 2>&1 &
             sleep 5
         "
