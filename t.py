@@ -9,19 +9,19 @@ from ray.util.queue import Queue
 
 from utils.lf_utils.dataset import step3_merge
 
-# if not ray.is_initialized():
-# ray.init(address="auto", log_to_driver=True)
-ray.init()
+if not ray.is_initialized():
+    ray.init(address="auto", log_to_driver=True)
+# ray.init()
 
 # HK version
-# step2_parquet(
-#     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-03",
-#     dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-03",
-#     tokenizer_name='dist',
-#     num_gpu_workers=8,
-#     batch_size=6000,
-#     chunk_size=12000,
-# )
+step2_parquet(
+    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-03",
+    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-03",
+    tokenizer_name='dist',
+    num_gpu_workers=8,
+    batch_size=6000,
+    chunk_size=12000,
+)
 
 
 
@@ -42,14 +42,14 @@ ray.init()
 #     max_concurrent=3000,
 # )
 
-step2_parquet(
-    src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
-    dst_dir="/GenSIvePFS/users/lutianyu/lf/pytest/parquet/swissprot_cif_v4",
-    tokenizer_name='dist',
-    num_gpu_workers=2,
-    batch_size=6000,
-    chunk_size=12000,
-)
+# step2_parquet(
+#     src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
+#     dst_dir="/GenSIvePFS/users/lutianyu/lf/pytest/parquet/swissprot_cif_v4",
+#     tokenizer_name='dist',
+#     num_gpu_workers=2,
+#     batch_size=6000,
+#     chunk_size=12000,
+# )
 
 
 
