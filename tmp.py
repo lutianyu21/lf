@@ -53,8 +53,9 @@ def iter_files(directory):
             if entry.is_file():
                 yield entry.name
 
-files = list(iter_files(src_dir))
-for i, f in tqdm(enumerate(files)):
-    logger.info(f"Moving file {i+1}/{len(files)}: {f}")
+i = 0
+for f in iter_files(src_dir):
+    logger.info(f"[{i}] Moving file {f}")
     dst = dst1 if i % 2 == 0 else dst2
     shutil.move(os.path.join(src_dir, f), os.path.join(dst, f))
+    i += 1
