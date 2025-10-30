@@ -12,7 +12,7 @@
 #SBATCH --cpus-per-task=224             # CPUs/task
 #SBATCH --mem=2000                      # memory(MB)/node
 #SBATCH --export=ALL
-#SBATCH -w cp2-dgx-[007,009,011,012]
+#SBATCH -w cp2-dgx-[007,031,011,012]
 
 CONTAINER_PATH=/home/projects/protein/lutianyu/images/modern.sqsh
 CONTAINER_NAME=modern
