@@ -41,9 +41,9 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 logger.propagate = False
 
-src_dir = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-00"
-dst1 = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part_00"
-dst2 = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part_01"
+src_dir = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-01"
+dst1 = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part_02"
+dst2 = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part_03"
 
 os.makedirs(dst1, exist_ok=True)
 os.makedirs(dst2, exist_ok=True)
