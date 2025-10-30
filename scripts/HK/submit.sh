@@ -70,7 +70,8 @@ pip config set global.index-url https://pypi.org/simple
 pip config list
 
 PIP=/root/miniconda3/envs/qwen3/bin/pip
-rm -r /tmp
+export TMPDIR=/GenSIvePFS/users/lutianyu/tmp
+mkdir -p $TMPDIR
 
 for pkg in colorlog ray einx; do
     if python -c "import $pkg" &>/dev/null; then
