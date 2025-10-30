@@ -71,11 +71,33 @@ pip config list
 
 PIP=/root/miniconda3/envs/qwen3/bin/pip
 rm -r /tmp
-$PIP install colorlog ray einx \
-    -e /GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold \
-    --trusted-host pypi.org \
-    --trusted-host pypi.python.org \
-    --trusted-host files.pythonhosted.org
+
+for pkg in colorlog ray einx; do
+    if python -c "import $pkg" &>/dev/null; then
+        echo "✅ $pkg already installed, skip."
+    else
+        echo "⬇️ Installing $pkg..."
+        $PIP install "$pkg" \
+            --trusted-host pypi.org \
+            --trusted-host pypi.python.org \
+            --trusted-host files.pythonhosted.org
+    fi
+done
+
+OPENFOLD_DIR="/GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold"
+if [ -d "$OPENFOLD_DIR" ]; then
+    if python -c "import openfold" &>/dev/null; then
+        echo "✅ openfold already installed, skip."
+    else
+        echo "⬇️ Installing local openfold..."
+        $PIP install -e "$OPENFOLD_DIR" \
+            --trusted-host pypi.org \
+            --trusted-host pypi.python.org \
+            --trusted-host files.pythonhosted.org
+    fi
+else
+    echo "⚠️ openfold path not found: $OPENFOLD_DIR"
+fi
 
 echo "=== Runnig task ==="
 cd /GenSIvePFS/users/lutianyu/lf
