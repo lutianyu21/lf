@@ -17,11 +17,29 @@
 #     except Exception as e:
 #         print(f"Error reading {parquet_file}: {e}")
 
-
+import logging
+import colorlog
 import os
 import shutil
 import random
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
+handler = colorlog.StreamHandler()
+handler.setFormatter(colorlog.ColoredFormatter(
+    "%(log_color)s" + "[%(asctime)s][%(levelname)s]" + " %(message)s",
+    log_colors={
+        'DEBUG':    'cyan',
+        'INFO':     'green',
+        'WARNING':  'yellow',
+        'ERROR':    'red',
+        'CRITICAL': 'bold_red',
+    }
+))
+logger.handlers.clear()
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
 
 src_dir = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-00"
 dst1 = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part_00"
@@ -36,7 +54,7 @@ def iter_files(directory):
                 yield entry.name
 
 files = list(iter_files(src_dir))
-random.shuffle(files)
 for i, f in tqdm(enumerate(files)):
+    logger.info(f"Moving file {i+1}/{len(files)}: {f}")
     dst = dst1 if i % 2 == 0 else dst2
     shutil.move(os.path.join(src_dir, f), os.path.join(dst, f))
