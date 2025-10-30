@@ -9,12 +9,13 @@ from ray.util.queue import Queue
 from utils.lf_utils.dataset import step3_merge
 
 
-ray.init(address=os.environ.get("RAY_ADDRESS"), log_to_driver=True)
+# ray.init(address=os.environ.get("RAY_ADDRESS"), log_to_driver=True)
+ray.init()
 
 # HK version
 step2_parquet(
-    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-03",
-    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-03",
+    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-00",
+    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-00",
     tokenizer_name='dist',
     num_gpu_workers=8,
     batch_size=6000,
