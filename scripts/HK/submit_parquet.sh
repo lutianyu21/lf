@@ -48,6 +48,7 @@ srun --nodes=1 --ntasks=1 -w $head_node enroot start -r \
     -- bash -c "
         $RAY_BIN stop >/dev/null 2>&1;
         nohup $RAY_BIN start --head --node-ip-address=$head_ip --port=$port \
+            --logging-dir=/GenSIvePFS/users/lutianyu/lf/ray_head.log \
             --num-cpus=224 --num-gpus=8 --dashboard-port=8265 > /tmp/ray_head.log 2>&1 &
         sleep 10
     "
@@ -61,7 +62,8 @@ for node in "${nodes[@]:1}"; do
         -- bash -c "
             $RAY_BIN stop >/dev/null 2>&1;
             nohup $RAY_BIN start --address="$head_ip:$port" \
-                --num-cpus=224 --num-gpus=8 > /tmp/ray_worker.log 2>&1 &
+            --logging-dir=/GenSIvePFS/users/lutianyu/lf/ray_worker.log \
+            --num-cpus=224 --num-gpus=8 > /tmp/ray_worker.log 2>&1 &
             sleep 5
         "
 done
