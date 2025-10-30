@@ -413,12 +413,11 @@ def main(config: DictConfig):
     
     # however we need to add a new field 'dev' to distinguish them
     # for train 'dev' = 0, for overfit 'dev' = 1, for eval 'dev' = 2, for test 'dev' = 3
-    ds_list = [ds_train, ds_overfit, ds_eval, ds_test]
-    for i in range(len(ds_list)):
-        ds_list[i] = ds_list[i].add_column("dev", [i] * len(ds_list[i]))  # type: ignore
-    ds_train, ds_overfit, ds_eval, ds_test = ds_list
-        
-    
+    ds_train = ds_train.add_column("dev", [0] * ds_train.num_rows) # type: ignore
+    ds_overfit = ds_overfit.add_column("dev", [1] * ds_overfit.num_rows) # type: ignore
+    ds_eval = ds_eval.add_column("dev", [2] * ds_eval.num_rows) # type: ignore
+    ds_test = ds_test.add_column("dev", [3] * ds_test.num_rows) # type: ignore
+
     train_dataset = ds_train
     eval_dataset = datasets.concatenate_datasets([ds_overfit, ds_eval, ds_test]) # type: ignore
     
