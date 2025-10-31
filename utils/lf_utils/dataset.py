@@ -11,6 +11,7 @@ import pandas as pd
 import pyarrow
 import pyarrow.parquet
 import time
+from scipy.fft import dst
 from tqdm import tqdm
 
 import ray
@@ -125,14 +126,17 @@ def process_file(input_path: Path, output_dir: Path, clear: bool):
 
 def step1_pickle(
     src_dir: str | Path,
-    dst_dir: str | Path,
+    dst1_dir: str | Path,
+    dst2_dir: str | Path,
     dataset_name: str = "afdb",
     max_concurrent: int = 8,
     clear: bool = False,
 ):
     if isinstance(src_dir, str): src_dir = Path(src_dir)
-    if isinstance(dst_dir, str): dst_dir = Path(dst_dir)
-    dst_dir.mkdir(parents=True, exist_ok=True)
+    if isinstance(dst1_dir, str): dst1_dir = Path(dst1_dir)
+    if isinstance(dst2_dir, str): dst2_dir = Path(dst2_dir)
+    dst1_dir.mkdir(parents=True, exist_ok=True)
+    dst2_dir.mkdir(parents=True, exist_ok=True)
     seed_everything(2025)
     
     results, failures, futures = [], [], []
@@ -143,7 +147,8 @@ def step1_pickle(
         "afdb":             _stream_iterate_afdb,
         "swissprot_v4":     _stream_iterate_swissprot,
     }[dataset_name]
-    for p in stream_iterate(src_dir):
+    for i, p in enumerate(stream_iterate(src_dir)):
+        dst_dir = dst1_dir if i % 2 == 0 else dst2_dir
         futures.append(process_file.remote(p, dst_dir, clear))
         total_count += 1
         if len(futures) >= max_concurrent:
@@ -173,11 +178,11 @@ def step1_pickle(
                 logger.error(f"[uid={total_count}] Failed: {res[1]} Error: {res[2]}")
                 failures.append(res[1])
         results.extend(done_results)
-    
-    failures_file = dst_dir / "failures.txt"
+
+    failures_file = dst1_dir / "failures.txt"
     if failures_file.exists(): failures_file.unlink()
     if failures:
-        with open(dst_dir/'failures.txt', "w") as f:
+        with open(failures_file, "w") as f:
             for item in failures:
                 f.write(f"{item}\n")
         logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")

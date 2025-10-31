@@ -22,15 +22,15 @@ ray.init()
 #     chunk_size=12000,
 # )
 
-step2_parquet(
-    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-00",
-    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-00",
-    tokenizer_name='dist',
-    num_cpu_workers=100,
-    num_gpu_workers=8,
-    batch_size=6000,
-    part_size=12000,
-)
+# step2_parquet(
+#     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-00",
+#     dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-00",
+#     tokenizer_name='dist',
+#     num_cpu_workers=100,
+#     num_gpu_workers=8,
+#     batch_size=6000,
+#     part_size=12000,
+# )
 
 
 # step3_merge(
@@ -40,14 +40,14 @@ step2_parquet(
 # )
 
 
-
-# step1_pickle(
-#     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/part_01",
-#     dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-01",
-#     dataset_name="afdb",
-#     clear=True, # for afdb only
-#     max_concurrent=3000,
-# )
+step1_pickle(
+    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/part_00",
+    dst1_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/split_00",
+    dst2_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/split_01",
+    dataset_name="afdb",
+    clear=True, # for afdb only
+    max_concurrent=3000,
+)
 
 # step2_parquet(
 #     src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
