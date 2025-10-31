@@ -17,6 +17,7 @@
 #     except Exception as e:
 #         print(f"Error reading {parquet_file}: {e}")
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import colorlog
 import os
@@ -41,21 +42,29 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 logger.propagate = False
 
-src_dir = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-01"
-dst1 = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part_02"
-dst2 = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part_03"
+src = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part-00"
+dst1 = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part_00"
+dst2 = "/GenSIvePFS/users/lutianyu/data/AFDB/pickle/part_01"
 
 os.makedirs(dst1, exist_ok=True)
 os.makedirs(dst2, exist_ok=True)
+
 def iter_files(directory):
     with os.scandir(directory) as it:
         for entry in it:
             if entry.is_file():
                 yield entry.name
 
-i = 0
-for f in iter_files(src_dir):
-    logger.info(f"[{i}] Moving file {f}")
+def move_file(i, name):
     dst = dst1 if i % 2 == 0 else dst2
-    shutil.move(os.path.join(src_dir, f), os.path.join(dst, f))
-    i += 1
+    src_path = os.path.join(src, name)
+    dst_path = os.path.join(dst, name)
+    if not os.path.exists(dst_path):
+        shutil.move(src_path, dst_path)
+        logger.info(f"Moved file {src_path} to {dst_path}")
+    else:
+        logger.warning(f"File {dst_path} already exists. Skipping move.")
+
+with ThreadPoolExecutor(max_workers=64) as pool:
+    for i, name in enumerate(iter_files(src)):
+        pool.submit(move_file, i, name)
