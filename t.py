@@ -20,15 +20,15 @@ ray.init()
 #     chunk_size=12000,
 # )
 
-# step2_parquet(
-#     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/split_00",
-#     dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/split_00",
-#     tokenizer_name='dist',
-#     num_cpu_workers=40,
-#     num_gpu_workers=8,
-#     batch_size=6000,
-#     part_size=12000,
-# )
+step2_parquet(
+    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/split_00",
+    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/split_00",
+    tokenizer_name='dist',
+    num_cpu_workers=40,
+    num_gpu_workers=8,
+    batch_size=5000,
+    part_size=10000,
+)
 
 
 # step3_merge(
@@ -47,14 +47,14 @@ ray.init()
 #     max_concurrent=3000,
 # )
 
-step2_parquet(
-    src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
-    dst_dir="/GenSIvePFS/users/lutianyu/lf/pytest/tmp/swissprot_cif_v4",
-    tokenizer_name='dist',
-    num_gpu_workers=2,
-    batch_size=6000,
-    part_size=12000,
-)
+# step2_parquet(
+#     src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
+#     dst_dir="/GenSIvePFS/users/lutianyu/lf/pytest/tmp/swissprot_cif_v4",
+#     tokenizer_name='dist',
+#     num_gpu_workers=2,
+#     batch_size=6000,
+#     part_size=12000,
+# )
 
 
 
