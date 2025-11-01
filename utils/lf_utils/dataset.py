@@ -11,7 +11,6 @@ import pandas as pd
 import pyarrow
 import pyarrow.parquet
 import time
-from scipy.fft import dst
 from tqdm import tqdm
 
 import ray

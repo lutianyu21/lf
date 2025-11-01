@@ -1,12 +1,10 @@
 # test build_dataset_from_entry
 import os
-from joblib import parallel_backend
 from utils.lf_utils import protein_processor, step1_pickle, step2_parquet
 from pathlib import Path
 import ray
 from ray.util.queue import Queue
 
-from utils.lf_utils.dataset import step3_merge
 
 
 # ray.init(address=os.environ.get("RAY_ADDRESS"), log_to_driver=True)
@@ -22,15 +20,15 @@ ray.init()
 #     chunk_size=12000,
 # )
 
-step2_parquet(
-    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/split_00",
-    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/split_00",
-    tokenizer_name='dist',
-    num_cpu_workers=40,
-    num_gpu_workers=8,
-    batch_size=6000,
-    part_size=12000,
-)
+# step2_parquet(
+#     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/split_00",
+#     dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/split_00",
+#     tokenizer_name='dist',
+#     num_cpu_workers=40,
+#     num_gpu_workers=8,
+#     batch_size=6000,
+#     part_size=12000,
+# )
 
 
 # step3_merge(
@@ -49,14 +47,14 @@ step2_parquet(
 #     max_concurrent=3000,
 # )
 
-# step2_parquet(
-#     src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
-#     dst_dir="/GenSIvePFS/users/lutianyu/lf/pytest/parquet/swissprot_cif_v4",
-#     tokenizer_name='dist',
-#     num_gpu_workers=2,
-#     batch_size=6000,
-#     chunk_size=12000,
-# )
+step2_parquet(
+    src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",
+    dst_dir="/GenSIvePFS/users/lutianyu/lf/pytest/tmp/swissprot_cif_v4",
+    tokenizer_name='dist',
+    num_gpu_workers=2,
+    batch_size=6000,
+    part_size=12000,
+)
 
 
 
