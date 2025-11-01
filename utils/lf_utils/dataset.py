@@ -21,7 +21,7 @@ import numpy as np
 import torch
 
 from tokenizers import Tokenizer
-from ..bio_utils import OpenfoldProtein
+from ..openfold_utils import OpenfoldProtein
 from .protein_processor import ProteinProcessor
 from .protein_tokenizer import DPLMProteinTokenizer
 from .protein_tokenizer import DistMatrixTokenizer
