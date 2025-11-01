@@ -1,6 +1,3 @@
-
-import chunk
-from sys import version
 import time
 from typing import Any, Dict, Optional, List, Tuple
 
@@ -17,7 +14,7 @@ from transformers.feature_extraction_utils import BatchFeature
 
 from .text_tokenizer import TextTokenizer
 from .protein_tokenizer import ProteinTokenizer
-from ..bio_utils.io import OpenfoldProtein
+from ..openfold_utils.io import OpenfoldProtein
 
 
 
