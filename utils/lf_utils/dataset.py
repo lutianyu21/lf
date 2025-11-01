@@ -22,7 +22,7 @@ import numpy as np
 import torch
 
 from tokenizers import Tokenizer
-from ..openfold_utils import OpenfoldProtein
+from ..bio_utils import OpenfoldProtein
 from .protein_processor import ProteinProcessor
 from .protein_tokenizer import DPLMProteinTokenizer
 from .protein_tokenizer import DistMatrixTokenizer
@@ -101,6 +101,11 @@ def _stream_iterate_rcsb(rcsb_dir: str | Path) -> Iterator[Path]:
         for cif_path in rcsb_dir.glob("*.cif"):
             yield cif_path
 
+def _stream_iterate_casp(casp_dir: str | Path) -> Iterator[Path]:
+    if isinstance(casp_dir, str): casp_dir = Path(casp_dir)
+    for pdb_path in casp_dir.glob("*.pdb"):
+        yield pdb_path
+
 
 @ray.remote
 def process_file(input_path: Path, output_dir: Path, clear: bool):
@@ -109,7 +114,7 @@ def process_file(input_path: Path, output_dir: Path, clear: bool):
         ("skipped", output_path) -> skipped
         ("failed", input_path, str(error)) -> failed
     """
-    output_path = output_dir / (input_path.name.strip('.gz').strip('.cif') + ".pkl")
+    output_path = output_dir / (input_path.name.strip('.gz').strip('.cif').strip('.pdb') + ".pkl")
     if output_path.exists():
         if clear: input_path.unlink()
         return ("skipped", str(output_path))
@@ -143,6 +148,7 @@ def step1_pickle(
     total_count = 0
     # TODO convert generator to support others
     stream_iterate = {
+        "casp":             _stream_iterate_casp,
         "rcsb":             _stream_iterate_rcsb,
         "afdb":             _stream_iterate_afdb,
         "swissprot_v4":     _stream_iterate_swissprot,

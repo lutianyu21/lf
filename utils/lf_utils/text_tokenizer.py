@@ -23,16 +23,16 @@ class TextTokenizer(PreTrainedTokenizerFast):
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs) 
-        self.boseq_token = '<|boseq|>'
-        self.eoseq_token = '<|eoseq|>'
-        self.bostruct_token = '<|bostruct|>'
-        self.eostruct_token = '<|eostruct|>'
-        self.struct_regex = r"<\|struct(\d{4})\|>"
-        self.struct_template = "<|struct{token_id:0>4d}|>"
+        self.boseq_token = '<seq>'
+        self.eoseq_token = '</seq>'
+        self.bostruct_token = '<struct>'
+        self.eostruct_token = '</struct>'
+        self.struct_regex = r"<\|s(\d{4})\|>"
+        self.struct_template = "<|s{token_id:0>4d}|>"
         self.struct_vsz = kwargs.get("struct_vsz", 0)
         self.add_special_tokens({
             'additional_special_tokens': \
-            ['<|boseq|>', '<|eoseq|>', '<|bostruct|>', '<|eostruct|>'] + \
+            [self.boseq_token, self.eoseq_token, self.bostruct_token, self.eostruct_token] + \
             [self.struct_template.format(token_id=i) for i in range(self.struct_vsz)] # type: ignore
         })
 

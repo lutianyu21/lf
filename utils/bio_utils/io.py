@@ -97,7 +97,9 @@ class ChainName2ChainId:
     def __getitem__(self, name: str) -> int:
         name = name.upper()
         L = len(name)
-        if L == 1:
+        if L == 0:
+            return 0
+        elif L == 1:
             return self.CHARS.index(name)
         elif L == 2:
             return self.BASE + self.BASE * self.CHARS.index(name[0]) + self.CHARS.index(name[1])
@@ -207,7 +209,6 @@ def _gemmi_parser(
     for chain, name in zip(it, it_name):
         if subchains is not None and name not in subchains:
             continue
-        
         feature_template = {
             'residue_atom37_coord': [],         # [L, 37, 3]
             'residue_atom37_mask':  [],         # [L, 37]
@@ -347,7 +348,7 @@ class OpenfoldProtein:
     def from_file(cls, path: str | Path, verbose: bool = True):
         if isinstance(path, str): path = Path(path)
         assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb', '.gz'], f'Unsupported file type: {path.suffix}'
-        stem = path.name.strip('.gz').strip('.cif')
+        stem = path.name.strip('.gz').strip('.cif').strip('.pdb')
         instance = cls()
         gemmi_out = _gemmi_parser(path, verbose=verbose)
         if gemmi_out == {}:

@@ -11,7 +11,7 @@ from torch import nn
 import torch.nn.functional as F
 import numpy as np
 
-from ..openfold_utils.io import OpenfoldBackbone, OpenfoldProtein, atom_order
+from ..bio_utils.io import OpenfoldBackbone, OpenfoldProtein, atom_order
 
 __all__ = [
     'ProteinTokenizer',

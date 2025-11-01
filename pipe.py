@@ -26,7 +26,7 @@ from transformers import EvalPrediction
 from tokenizers import Tokenizer
 
 from utils.lf_utils.protein_tokenizer import DistMatrixTokenizer
-from utils.openfold_utils import OpenfoldProtein
+from utils.bio_utils import OpenfoldProtein
 from utils.lf_utils import (
     DistMatrixTokenizer,
     DPLMProteinTokenizer,

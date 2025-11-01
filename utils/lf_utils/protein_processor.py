@@ -17,7 +17,7 @@ from transformers.feature_extraction_utils import BatchFeature
 
 from .text_tokenizer import TextTokenizer
 from .protein_tokenizer import ProteinTokenizer
-from ..openfold_utils.io import OpenfoldProtein
+from ..bio_utils.io import OpenfoldProtein
 
 
 
@@ -184,8 +184,8 @@ class ProteinProcessor(ProcessorMixin):
             token_ids = token_ids[~padding_mask.bool()]
             struct_text = "".join([self.struct_template.format(token_id=i) for i in token_ids])
             struct_length = len(token_ids)
-            text = f"<|bos|><|boseq|>{seq_text}<|eoseq|><|bostruct|>{struct_text}<|eostruct|><|eos|>"
-            prompt = f"<|bos|><|boseq|>{seq_text}<|eoseq|><|bostruct|>"  
+            text = f"<seq>{seq_text}</seq><struct>{struct_text}</struct>"
+            prompt = f"<seq>{seq_text}</seq><struct>"
             results.append({
                 "pdb_name": protein.entry,
                 "plddt": protein.plddt,
@@ -193,7 +193,6 @@ class ProteinProcessor(ProcessorMixin):
                 "prompt": prompt,
                 "seq_length": seq_length,
                 "struct_length": struct_length,
-                "total_length": seq_length + struct_length + 6,
             })
         return results
         
