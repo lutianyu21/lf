@@ -1,0 +1,3 @@
+type:           dist
+fpath_train:    /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/train.json
+fpath_eval:     /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/toy_eval.json

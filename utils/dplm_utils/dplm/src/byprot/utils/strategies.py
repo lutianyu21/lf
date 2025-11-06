@@ -2,11 +2,20 @@ import logging
 from typing import Dict, List, Union
 
 import torch
-from lightning_fabric.strategies.fsdp import (
-    _has_meta_device_parameters,
-    _move_torchmetrics_to_device,
-    _setup_activation_checkpointing,
-)
+try:
+    # For lightning-fabric >= 2.5
+    from lightning_fabric.strategies.fsdp import (
+        _has_meta_device_parameters_or_buffers as _has_meta_device_parameters,
+        _move_torchmetrics_to_device,
+        _setup_activation_checkpointing,
+    )
+except ImportError:
+    # For lightning-fabric < 2.5
+    from lightning_fabric.strategies.fsdp import (
+        _has_meta_device_parameters,
+        _move_torchmetrics_to_device,
+        _setup_activation_checkpointing,
+    )
 
 # from pytorch_lightning.strategies.fully_sharded import DDPFullyShardedStrategy
 # from pytorch_lightning.strategies.sharded import DDPShardedStrategy

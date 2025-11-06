@@ -1,5 +1,7 @@
 # test build_dataset_from_entry
+from math import pi
 import os
+import pipe
 from utils.lf_utils import protein_processor, step1_pickle, step2_parquet
 from pathlib import Path
 import ray
@@ -20,15 +22,56 @@ ray.init()
 #     chunk_size=12000,
 # )
 
-step2_parquet(
-    src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/split_00",
-    dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/split_00",
-    tokenizer_name='dist',
-    num_cpu_workers=40,
-    num_gpu_workers=8,
-    batch_size=5000,
-    part_size=10000,
-)
+
+
+
+
+
+def pipe_cameo2022():
+    step1_pickle(
+        dataset_name="cameo",
+        src_dir="/GenSIvePFS/users/lutianyu/lf/data/raw/cameo2022",
+        dst1_dir="/GenSIvePFS/users/lutianyu/lf/data/pickle/cameo2022",
+        clear=False, # for afdb only
+        max_concurrent=3000,
+    )
+    step2_parquet(
+        dataset_name="cameo2022",
+        src_dir="/GenSIvePFS/users/lutianyu/lf/data/pickle/cameo2022",
+        dst_dir="/GenSIvePFS/users/lutianyu/lf/data/parquet/cameo2022",
+        tokenizer_name='dist',
+        num_cpu_workers=10,
+        num_gpu_workers=2,
+        batch_size=5000,
+        part_size=100000,
+    )
+    
+    
+def pipe_rcsb_monomer():
+    step1_pickle(
+        dataset_name="cameo",
+        src_dir="/GenSIvePFS/users/lutianyu/lf/data/raw/template",
+        dst1_dir="/GenSIvePFS/users/lutianyu/lf/data/pickle/rcsb/chain",
+        clear=False, # for afdb only
+        max_concurrent=3000,
+    )
+    
+
+if __name__ == "__main__":
+    # pipe_cameo2022()
+    pipe_rcsb_monomer()
+
+
+
+# step2_parquet(
+#     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/split_00",
+#     dst_dir="/GenSIvePFS/users/lutianyu/data/AFDB/parquet/split_00",
+#     tokenizer_name='dist',
+#     num_cpu_workers=40,
+#     num_gpu_workers=8,
+#     batch_size=5000,
+#     part_size=10000,
+# )
 
 
 # step3_merge(
@@ -38,14 +81,7 @@ step2_parquet(
 # )
 
 
-# step1_pickle(
-#     src_dir="/GenSIvePFS/users/lutianyu/data/AFDB/part_00",
-#     dst1_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/split_00",
-#     dst2_dir="/GenSIvePFS/users/lutianyu/data/AFDB/pickle/split_01",
-#     dataset_name="afdb",
-#     clear=True, # for afdb only
-#     max_concurrent=3000,
-# )
+
 
 # step2_parquet(
 #     src_dir="/GenSIvePFS/users/lutianyu/lf/pytest/pickle/swissprot_cif_v4",

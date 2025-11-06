@@ -1,3 +1,4 @@
+from cProfile import label
 from typing import Any, Callable, Dict, Iterable, List
 
 import math
@@ -6,14 +7,43 @@ import torch
 import torch.utils
 import torch.utils.data
 import torch.distributed as dist
+from transformers import Qwen2TokenizerFast
 
-
+from .constant import DATASET_SPLIT
 from .protein_processor import ProteinProcessor
 
 __all__ = [
     'TextCollator',
+    'ExtraColumnCollator',
     'SortishApproxBatchDataloader'
 ]
+
+
+
+
+class ExtraColumnCollator:
+    def __init__(self):
+        pass
+        
+    def __call__(self, batch: List[Dict[str, Any]]) -> Any:
+        if len(batch) > 1: raise NotImplementedError("ExtraColumnCollator only accepts batch size of 1")
+        return dict(
+            input_ids=torch.tensor(batch[0]['input_ids']).unsqueeze(0),
+            attention_mask=torch.tensor(batch[0]['attention_mask']).unsqueeze(0),
+            labels=torch.tensor(batch[0]['labels']).unsqueeze(0),
+            pdb_name=list(map(lambda x: x["pdb_name"], batch)),
+            split=list(map(lambda x: x["split"], batch)),
+            seq_length=torch.tensor(list(map(lambda x: x["seq_length"], batch))),
+            struct_length=torch.tensor(list(map(lambda x: x["struct_length"], batch)))
+        )
+
+
+
+
+
+    
+
+
 
 
 class TextCollator:

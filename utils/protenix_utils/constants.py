@@ -72,7 +72,7 @@ CRYSTALLIZATION_METHODS = {
 
 ### Protein Constants ###
 # https://mmcif.wwpdb.org/dictionaries/mmcif_pdbx_v40.dic/Items/_entity_poly.pdbx_seq_one_letter_code_can.html
-from rdkit.Chem import GetPeriodicTable # type: ignore
+# from rdkit.Chem import GetPeriodicTable # type: ignore
 
 mmcif_restype_1to3 = {
     "A": "ALA",

@@ -99,11 +99,32 @@ def _stream_iterate_rcsb(rcsb_dir: str | Path) -> Iterator[Path]:
     else:
         for cif_path in rcsb_dir.glob("*.cif"):
             yield cif_path
+                        
 
 def _stream_iterate_casp(casp_dir: str | Path) -> Iterator[Path]:
     if isinstance(casp_dir, str): casp_dir = Path(casp_dir)
     for pdb_path in casp_dir.glob("*.pdb"):
         yield pdb_path
+        
+
+
+
+
+
+
+# updated api:
+def _stream_iterate_cameo(data_dir: str | Path) -> Iterator[Path]:
+    logger.info('Streaming CAMEO2022 dataset...')
+    if isinstance(data_dir, str): data_dir = Path(data_dir)
+    list_path = data_dir / "fpath.txt"
+    with open(list_path, 'r') as f:
+        for line in f:
+            pdb_path = Path(line.strip())
+            yield pdb_path
+
+
+
+
 
 
 @ray.remote
@@ -129,16 +150,17 @@ def process_file(input_path: Path, output_dir: Path, clear: bool):
     
 
 def step1_pickle(
+    dataset_name: str,
     src_dir: str | Path,
     dst1_dir: str | Path,
-    dst2_dir: str | Path,
-    dataset_name: str = "afdb",
+    dst2_dir: str | Path | None = None,
     max_concurrent: int = 8,
     clear: bool = False,
 ):
     if isinstance(src_dir, str): src_dir = Path(src_dir)
     if isinstance(dst1_dir, str): dst1_dir = Path(dst1_dir)
     if isinstance(dst2_dir, str): dst2_dir = Path(dst2_dir)
+    if dst2_dir is None: dst2_dir = dst1_dir
     dst1_dir.mkdir(parents=True, exist_ok=True)
     dst2_dir.mkdir(parents=True, exist_ok=True)
     seed_everything(2025)
@@ -151,6 +173,7 @@ def step1_pickle(
         "rcsb":             _stream_iterate_rcsb,
         "afdb":             _stream_iterate_afdb,
         "swissprot_v4":     _stream_iterate_swissprot,
+        "cameo":            _stream_iterate_cameo,
     }[dataset_name]
     for i, p in enumerate(stream_iterate(src_dir)):
         dst_dir = dst1_dir if i % 2 == 0 else dst2_dir
@@ -316,13 +339,14 @@ def step1_pickle(
 
 @ray.remote(num_gpus=1)
 class GPUWorker:
-    def __init__(self, tokenizer_name: str):
+    def __init__(self, dataset_name: str, tokenizer_name: str):
         from .protein_processor import ProteinProcessor
         gpu_ids = ray.get_gpu_ids()
         if not gpu_ids:
             raise RuntimeError("No GPU assigned to this actor")
         self.device = torch.device(f"cuda:0")
         # lazy initilaize
+        self.dataset_name = dataset_name
         self.tokenizer_name = tokenizer_name
         self.processor = None
 
@@ -344,7 +368,7 @@ class GPUWorker:
                 tokenizer=text_tokenizer,
                 struct_tokenizer=struct_tokenizer,
             ).to(self.device)
-        return self.processor.preprocess_dataset(batch, verbose=False)
+        return self.processor.preprocess_dataset(self.dataset_name,batch, verbose=False)
 
 
 @ray.remote
@@ -389,9 +413,10 @@ class PickleWorker:
         
 
 def step2_parquet(
+    dataset_name: str,
+    tokenizer_name: str,
     src_dir: str | Path,
     dst_dir: str | Path,
-    tokenizer_name: str,
     num_cpu_workers: int = 8,
     num_gpu_workers: int = 4,
     batch_size: int = 64,
@@ -403,7 +428,7 @@ def step2_parquet(
     
     queue = Queue(100)
     seed_everything(2025)
-    gpu_workers = [GPUWorker.remote(tokenizer_name) for _ in range(num_gpu_workers)]
+    gpu_workers = [GPUWorker.remote(dataset_name, tokenizer_name) for _ in range(num_gpu_workers)]
     gpu_workers_max = num_gpu_workers * 2
     cpu_workers = [PickleWorker.remote(str(src_dir), batch_size, num_cpu_workers, i) for i in range(num_cpu_workers)]
     cpu_workers_done = 0

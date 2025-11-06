@@ -22,7 +22,7 @@ __all__ = ['ProteinProcessor']
 
 class ProteinProcessor(ProcessorMixin):
     """ Organize components. """
-    tokenizer: TextTokenizer
+    tokenizer: Any
     struct_tokenizer: ProteinTokenizer
     struct_vsz: int
     struct_regex: str
@@ -34,7 +34,7 @@ class ProteinProcessor(ProcessorMixin):
     
     def __init__(
         self,
-        tokenizer: TextTokenizer,
+        tokenizer: Any,
         struct_tokenizer: ProteinTokenizer,
     ):
         super().__init__(tokenizer)
@@ -44,7 +44,6 @@ class ProteinProcessor(ProcessorMixin):
         self.struct_vsz = struct_tokenizer.vsz
         self.struct_regex = tokenizer.struct_regex
         self.struct_template = tokenizer.struct_template
-        self.constant = self.constant_helper()
 
     @torch.no_grad()
     def __call__(
@@ -98,13 +97,13 @@ class ProteinProcessor(ProcessorMixin):
         # specifying additional kwargs for structure decoding e.g. residue_mask
         
         string = self.tokenizer.decode(token_ids)
-        pattern = rf'({re.escape(self.tokenizer.bostruct_token)}.*?{re.escape(self.tokenizer.eostruct_token)})'
+        pattern = rf'^{re.escape(self.tokenizer.bostruct_token)}(({self.tokenizer.struct_regex})+){re.escape(self.tokenizer.eostruct_token)}$'
         chunks = re.split(pattern, string)
         seq_output, struct_output, entity_output = [], [], []
         
         for i, c in enumerate(chunks):
             if len(c) == 0: continue
-            if self.tokenizer.bostruct_token in c:
+            if self.tokenizer.bostruct_token in c and self.tokenizer.eostruct_token in c:
                 # as structure
                 protein = self.struct_tokenizer.decode(
                     token_ids=torch.tensor(
@@ -158,7 +157,7 @@ class ProteinProcessor(ProcessorMixin):
         }
 
     @staticmethod
-    def compute_tm_align(structure1: OpenfoldProtein, structure2: OpenfoldProtein, ref: OpenfoldProtein | None) -> Tuple[float, float]:
+    def compute_tm_align(structure1: OpenfoldProtein, structure2: OpenfoldProtein, ref: OpenfoldProtein | None) -> Tuple[float, float, float]:
         if ref is not None:
             structure1.inherit(ref)
             structure2.inherit(ref)
@@ -167,16 +166,15 @@ class ProteinProcessor(ProcessorMixin):
     @staticmethod
     def compute_kbastch_align(structure1: OpenfoldProtein, structure2: OpenfoldProtein) -> Tuple[float, float]:
         raise NotImplementedError()
-    
-    
-    def preprocess_dataset(self, batch: List[OpenfoldProtein], verbose: bool = True) -> List[dict]:
+
+    def preprocess_dataset(self, dataset_name: str, batch: List[OpenfoldProtein], verbose: bool = True) -> List[dict]:
         batch = [b.to(self.device) for b in batch]
         out = self.struct_tokenizer(batch)
         results = []
         batch_token_ids = out['batch_token_ids']                # [B, L]
         batch_padding_mask = (batch_token_ids == -100).long()   # [B, L]
         for protein, token_ids, padding_mask in zip(batch, batch_token_ids, batch_padding_mask):
-            seq_text = str(protein)
+            seq_text = ' '.join(list(str(protein)))
             seq_length = len(protein)
             token_ids = token_ids[~padding_mask.bool()]
             struct_text = "".join([self.struct_template.format(token_id=i) for i in token_ids])
@@ -190,6 +188,7 @@ class ProteinProcessor(ProcessorMixin):
                 "prompt": prompt,
                 "seq_length": seq_length,
                 "struct_length": struct_length,
+                "split": dataset_name,
             })
         return results
         

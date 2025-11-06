@@ -6,5 +6,6 @@ from .protein_tokenizer import (
 )
 from .text_tokenizer import TextTokenizer
 from .dataset import step1_pickle, step2_parquet, step3_merge
-from .data import TextCollator, SortishApproxBatchDataloader
+from .data import TextCollator, ExtraColumnCollator,  SortishApproxBatchDataloader
 from .logits import DynamicMultimodalLogitsProcessor
+from .constant import DATASET_SPLIT, DATASET_RAW_ROOT

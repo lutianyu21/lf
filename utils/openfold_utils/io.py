@@ -10,6 +10,7 @@ import numpy as np
 import tmtools
 from pathlib import Path
 from typing import Any, List, Tuple, Union, Optional, Union, Dict
+from ..protenix_utils import rmsd_globally_aligned
 
 
 __all__ = ['OpenfoldBackbone', 'OpenfoldProtein']
@@ -533,7 +534,7 @@ class OpenfoldProtein:
         self.residue_chain_index = other.residue_chain_index.clone().to(self.device)
         self.residue_atom37_bfactor = other.residue_atom37_bfactor.clone().to(self.device)
 
-    def align_with(self, other: 'OpenfoldProtein', chain_wise: bool = False) -> Tuple[float, float]:
+    def align_with(self, other: 'OpenfoldProtein', chain_wise: bool = False) -> Tuple[float, float, float]:
         assert len(self) == len(other), 'Length mismatch.'
         src_array = self.calpha.cpu().numpy()
         dst_array = other.calpha.cpu().numpy()
@@ -541,19 +542,28 @@ class OpenfoldProtein:
         if chain_wise:
             assert torch.equal(self.residue_chain_index, other.residue_chain_index), 'Chain index mismatch. Call inherit() first ?'
             unique_chain_idx = torch.unique(self.residue_chain_index)
-            tmscore_list, rmsd_list = [], []
+            tmscore_list, rmsd_l_list, rmsd_g_list = [], [], []
             for cidx in unique_chain_idx:
                 cidx_mask = (self.residue_chain_index == cidx).cpu().numpy()
                 src_c = src_array[cidx_mask]
                 dst_c = dst_array[cidx_mask]
-                dummy_seq = 'A' * sum(cidx_mask)
-                result = tmtools.tm_align(src_c, dst_c, dummy_seq, dummy_seq)
+                # local alignment
+                result = tmtools.tm_align(src_c, dst_c, 'A' * sum(cidx_mask), 'A' * sum(cidx_mask))
                 tmscore_list.append(result.tm_norm_chain1)
-                rmsd_list.append(result.rmsd)
-            return float(np.mean(tmscore_list)), float(np.mean(rmsd_list))
+                rmsd_l_list.append(result.rmsd)
+                # global alignment
+                rmsd_g_list.append(
+                    rmsd_globally_aligned(
+                        torch.tensor(src_c, device=self.device), torch.tensor(dst_c, device=self.device), atom_mask=self.residue_mask[cidx_mask]
+                    )[0].item()
+                )
+            return float(np.mean(tmscore_list)), float(np.mean(rmsd_l_list)), float(np.mean(rmsd_g_list))
         else:
             result = tmtools.tm_align(src_array, dst_array, str(self), str(other))
-            return result.tm_norm_chain1, result.rmsd
+            rmsd_g = rmsd_globally_aligned(
+                torch.tensor(src_array, device=self.device), torch.tensor(dst_array, device=self.device), atom_mask=self.residue_mask
+            )[0].item()
+            return result.tm_norm_chain1, result.rmsd, rmsd_g
         
     def distance_matrix(self) -> torch.Tensor:
         return self.calpha[:, None, :] - self.calpha[None, :, :]

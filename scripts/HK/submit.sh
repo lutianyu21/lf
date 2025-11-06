@@ -12,7 +12,7 @@
 #SBATCH --cpus-per-task=224             # CPUs/task
 #SBATCH --mem=2000                      # memory(MB)/node
 #SBATCH --export=ALL
-#SBATCH -w cp2-dgx-[007,031,011,012]
+#SBATCH -w cp2-dgx-[010,016,017,031]
 
 CONTAINER_PATH=/home/projects/protein/lutianyu/images/modern.sqsh
 CONTAINER_NAME=modern
@@ -73,7 +73,7 @@ PIP=/root/miniconda3/envs/qwen3/bin/pip
 export TMPDIR=/GenSIvePFS/users/lutianyu/tmp
 mkdir -p $TMPDIR
 
-for pkg in colorlog ray einx; do
+for pkg in colorlog ray einx trl; do
     if python -c "import $pkg" &>/dev/null; then
         echo "✅ $pkg already installed, skip."
     else

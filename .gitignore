@@ -17,6 +17,7 @@
 *.vscode
 *.cache
 *.pdb
+*.m8
 
 # slink
 **/rcsb

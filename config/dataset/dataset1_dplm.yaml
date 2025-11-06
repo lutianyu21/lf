@@ -1,3 +1,0 @@
-dataset_type:   dataset1_dplm
-dataset_train:  /GenSIvePFS/users/lutianyu/lf/data/dataset1_dplm.jsonl
-dataset_test:   /GenSIvePFS/users/lutianyu/lf/data/cameo2022_dplm.jsonl

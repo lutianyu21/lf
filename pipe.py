@@ -1,7 +1,10 @@
-from math import log
+import re
+import time
 from typing import Any, Dict, Optional, List, Text, Tuple, cast
 import os
 from pathlib import Path
+import warnings
+from h11 import Data
 import wandb
 import pandas as pd
 
@@ -19,14 +22,26 @@ import colorlog
 from omegaconf import OmegaConf, DictConfig
 import datasets
 from datasets import Dataset, load_dataset, Features, Value, ClassLabel, Sequence
-from transformers import AutoConfig, Trainer, TrainingArguments, TrainerCallback, is_datasets_available
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    Qwen2TokenizerFast,
+    Trainer,
+    TrainingArguments,
+    TrainerCallback,
+    PreTrainedModel,
+    EvalPrediction,
+    is_datasets_available,
+)
 from transformers.generation.configuration_utils import GenerationConfig
-from transformers import PreTrainedModel
-from transformers import EvalPrediction
-from tokenizers import Tokenizer
+from trl import SFTTrainer, SFTConfig
 
+
+
+from utils.dplm_utils.dplm.generate_dplm import generate
 from utils.lf_utils.protein_tokenizer import DistMatrixTokenizer
-from utils.bio_utils import OpenfoldProtein
+from utils.openfold_utils import OpenfoldProtein
 from utils.lf_utils import (
     DistMatrixTokenizer,
     DPLMProteinTokenizer,
@@ -34,10 +49,11 @@ from utils.lf_utils import (
     ProteinProcessor, 
     SortishApproxBatchDataloader,
     TextCollator,
-    DynamicMultimodalLogitsProcessor
+    ExtraColumnCollator,
+    DynamicMultimodalLogitsProcessor,
+    DATASET_SPLIT, DATASET_RAW_ROOT,
 )
 
-# fix bug
 # log color whenrank=0 & silent when rank>0
 rank = int(os.environ.get("RANK", 0))
 logger = logging.getLogger(__name__)
@@ -58,99 +74,25 @@ logger.setLevel(logging.INFO)
 logger.propagate = False
 
 
-class LFTrainer(Trainer):
+
+
+class SFTTrainerWithEval(SFTTrainer):
     
     def __init__(
         self,
         processor: ProteinProcessor,
-        train_collator: Any,
-        eval_collator: Any,
+        eval_collator: ExtraColumnCollator,
         *args,
         **kwargs
     ):
         super().__init__(*args, **kwargs)
         self.processor = processor
-        self.train_collator = train_collator
         self.eval_collator = eval_collator
-        self.eval_config = GenerationConfig(
-            use_cache=True,
-            eos_token_id=self.processor.tokenizer.eos_token_id,
-            bos_token_id=self.processor.tokenizer.bos_token_id,
-            pad_token_id=self.processor.tokenizer.pad_token_id,
-            do_sample=False,
-            max_new_tokens=5000,
-        )
-
-    def compute_loss(self, model, inputs: Dict[str, torch.Tensor], return_outputs=False, num_items_in_batch=None):
-        # ! we now no-longer relies on model forward to compute auxiliary loss !
-        outputs = model(**inputs)
-        
-        aux_log = {}
-        input_ids = cast(torch.Tensor, inputs['input_ids']) # [B, L], 
-        labels = cast(torch.Tensor, inputs['labels'])       # [B, L], w/ left-pading(-100), wo/ shift
-        logits = cast(torch.Tensor, outputs.logits)         # [B, L, V]
-
-        # match any <boseq>...<eoseq> segments & <bostruct>...<eostruct> segments
-        # calculate loss on these segments
-        boseq_token_id = self.processor.tokenizer.boseq_token_id
-        eoseq_token_id = self.processor.tokenizer.eoseq_token_id
-        bostruct_token_id = self.processor.tokenizer.bostruct_token_id
-        eostruct_token_id = self.processor.tokenizer.eostruct_token_id
-        seq_mask = (
-            (labels == boseq_token_id).cumsum(dim=1) - \
-            (labels == eoseq_token_id).cumsum(dim=1) + \
-            (labels == eoseq_token_id).float()
-        ) 
-        struct_mask = (
-            (labels == bostruct_token_id).cumsum(dim=1) - \
-            (labels == eostruct_token_id).cumsum(dim=1) + \
-            (labels == eostruct_token_id).float()
-        )
-        shift_logits = logits[..., :-1, :].contiguous()     # [B, L-1, V]
-        shift_labels = labels[..., 1:].contiguous()         # [B, L-1]
-        shift_seq_mask = seq_mask[..., 1:].contiguous()     # [B, L-1]
-        shift_struct_mask = struct_mask[..., 1:].contiguous() # [B, L-1]
-        loss_fct = CrossEntropyLoss(ignore_index=-100, reduction='none')
-        loss: torch.Tensor = loss_fct(
-            shift_logits.view(-1, shift_logits.size(-1)),
-            shift_labels.view(-1),
-        ) # [B*(L-1)]
-        seq_loss = loss[shift_seq_mask.view(-1).bool()].mean()
-        struct_loss = loss[shift_struct_mask.view(-1).bool()].mean()
-        aux_log['seq_loss'] = seq_loss.detach().cpu().item()
-        aux_log['struct_loss'] = struct_loss.detach().cpu().item()
-        
-        # supervise GPU memory usage
-        token_padded = labels.size(0) * labels.size(1)      # [BxL]
-        token2_padded = labels.size(0) * labels.size(1)**2  # [BxLxL]
-        token_nonpad = token_padded - (labels == -100).sum().item()
-        aux_log['token_padded'] = token_padded
-        aux_log['token2_padded'] = token2_padded
-        aux_log['token_nonpad'] = token_nonpad
-        aux_log['bsz'] = input_ids.size(0)
-        
-        aux_log['seq_length'] = inputs['seq_length'].float().mean().cpu().item()
-        aux_log['struct_length'] = inputs['struct_length'].float().mean().cpu().item()
-        if self.is_in_train:
-            self.log(aux_log)
-        outputs.aux_log = aux_log
-        
-        return (outputs.loss, outputs) if return_outputs else outputs.loss
-        
-    # during training: dynamic length-batching sampler
-    # DEV: adjust these parameters based on architecture
-    def get_train_dataloader(self):
-        return SortishApproxBatchDataloader(
-            ds=self.train_dataset,
-            collater=self.train_collator,
-            bucket_size=1000,
-            max_batch_size=256,
-            max_tokens=256000,
-            max_square_tokens=256000000,
-            max_len=2048,
-        )
     
-    # during evaluation: default padding sampler
+    ## overide to support extra columns ##
+    # - keep any extra columns
+    # - batch-size = 1, since we have to constraint generation length
+    
     def get_eval_dataloader(self, eval_dataset: Any = None) -> torch.utils.data.DataLoader:
         if eval_dataset is None and self.eval_dataset is None:
             raise ValueError("Trainer: evaluation requires an eval_dataset.")
@@ -161,12 +103,6 @@ class LFTrainer(Trainer):
             return self.accelerator.prepare(self._eval_dataloader)
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
         data_collator = self.eval_collator
-
-        if is_datasets_available() and isinstance(eval_dataset, datasets.Dataset):
-            eval_dataset = self._remove_unused_columns(eval_dataset, description="evaluation")
-        else:
-            data_collator = self._get_collator_with_removed_columns(data_collator, description="evaluation")
-
         dataloader_params = {
             "batch_size": self.args.eval_batch_size,
             "collate_fn": data_collator,
@@ -187,6 +123,80 @@ class LFTrainer(Trainer):
             self._eval_dataloader = eval_dataloader
         return self.accelerator.prepare(eval_dataloader)
     
+    def _prepare_non_packed_dataloader(
+        self,
+        tokenizer,
+        dataset,
+        dataset_text_field,
+        max_seq_length,
+        formatting_func: Any = None,
+        add_special_tokens=True,
+        remove_unused_columns=False,
+    ):
+        
+        use_formatting_func = formatting_func is not None and dataset_text_field is None
+        self._dataset_sanity_checked = False
+
+        # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
+        def tokenize(element):
+            outputs = tokenizer(
+                element["text"] if not use_formatting_func else formatting_func(element),
+                add_special_tokens=add_special_tokens,
+                truncation='prompt' not in element.keys(), # True for training; False for eval
+                padding=False,
+                max_length=max_seq_length,
+                return_overflowing_tokens=False,
+                return_length=False,
+            )
+
+            if use_formatting_func and not self._dataset_sanity_checked:
+                if not isinstance(formatting_func(element), list):
+                    raise ValueError(
+                        "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
+                    )
+                else:
+                    self._dataset_sanity_checked = True
+            # keep any other columns besides signature columns +++
+            if 'prompt' in element.keys():
+                outputs_prompt = tokenizer(
+                    element["prompt"] if not use_formatting_func else formatting_func(element),
+                    add_special_tokens=add_special_tokens,
+                    truncation=False,
+                    padding=False,
+                    max_length=max_seq_length,
+                    return_overflowing_tokens=False,
+                    return_length=False,
+                )
+                outputs['labels'] = outputs["input_ids"] # complete label
+                outputs['input_ids'] = outputs_prompt["input_ids"]
+            else:
+                outputs['labels'] = outputs["input_ids"]
+                
+            return {
+                "input_ids":        outputs["input_ids"],
+                "attention_mask":   outputs["attention_mask"],
+                "labels":           outputs["labels"],
+                **{k: element[k] for k in element.keys() if k not in outputs.keys()}
+            }
+
+        signature_columns = ["input_ids", "labels", "attention_mask"]
+
+        extra_columns = list(set(dataset.column_names) - set(signature_columns))
+
+        if not remove_unused_columns and len(extra_columns) > 0:
+            warnings.warn(
+                "You passed `remove_unused_columns=False` on a non-packed dataset. This might create some issues with the default collator and yield to errors. If you want to "
+                f"inspect dataset other columns (in this case {extra_columns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
+            )
+        tokenized_dataset = dataset.map(
+            tokenize,
+            batched=True,
+            remove_columns=dataset.column_names if remove_unused_columns else None,
+            num_proc=self.dataset_num_proc,
+            batch_size=self.dataset_batch_size,
+        )
+        return tokenized_dataset
+    
     @torch.no_grad()
     def prediction_step(
         self,
@@ -196,247 +206,202 @@ class LFTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None
     ):
         model.eval()
-        # all batched
-        device = inputs['input_ids'].device
-        self.processor.to(device)
-
-        labels = inputs["labels"]
-        outputs = model(
-            input_ids=inputs['input_ids'],
-            attention_mask=inputs['attention_mask'],
-            labels=labels,
-        )
-        exposure_loss: torch.Tensor = outputs.loss # []
+        tokenizer = self.processor.tokenizer
         
-        # generation evaluation
-        # step1: generate tokens
-        logits_processor = DynamicMultimodalLogitsProcessor(
-            **(self.processor.constant_helper()), # type: ignore
-            seq_length=inputs['seq_length'],
-            struct_length=inputs['struct_length']
+        # update generation config
+        eval_max_new_tokens = inputs['struct_length'][0].item()
+        eval_min_new_tokens = inputs['struct_length'][0].item()
+        eval_config = GenerationConfig(
+            use_cache=True,
+            eos_token_id=tokenizer.eos_token_id,
+            pad_token_id=tokenizer.pad_token_id,
+            do_sample=False,
+            max_new_tokens=eval_max_new_tokens,
+            min_new_tokens=eval_min_new_tokens,
         )
+
         generated_token_ids: torch.Tensor = model.generate(
-            input_ids=inputs["eval_input_ids"],
-            attention_mask=inputs["eval_attention_mask"],
-            generation_config=self.eval_config,
-            logits_processor=[logits_processor], # type: ignore
-        ) # type: ignore [B, L]
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            generation_config=eval_config,
+        ) # type: ignore [B, L] where B = 1 for now
+        target_token_ids = inputs['labels'][0]
         
-        # <|pad|><|pad|><|bos|><|boseq|>...<|eoseq|><|bostruct|>...<|eostruct|><|eos|>
-        # <|bos|><|boseq|>...<|eoseq|><|bostruct|>...<|eostruct|><|eos|><|pad|>
-        total_length = inputs['total_length'] # [B]
-        generated_token_ids = torch.where(generated_token_ids == self.processor.tokenizer.pad_token_id, -100, generated_token_ids)
+        # for regex, append a '</struct>' token at the end if not present
+        if not generated_token_ids[0].tolist()[-1] == tokenizer.eostruct_token_id:
+            generated_token_ids = torch.cat([
+                generated_token_ids,
+                torch.tensor([[tokenizer.eostruct_token_id]], device=generated_token_ids.device)
+            ], dim=1)
         
-        # step2: collect proteins 
-        pdb_name, split = inputs["pdb_name"], inputs["split"]
-        template = {
-            "afdb_swissprot":   "data/raw/swissprot_v4/{x}.cif.gz",
-            "pdb":              "data/raw/rcsb/{x}.cif",
-            "cameo2022":        "data/raw/rcsb/{x}.cif"
-        }
-        protein_collect = [
-            OpenfoldProtein.from_file(Path(__file__).parent/template[y].format(x=x)).to(device)
-            for x, y in zip(pdb_name, split)
-        ]
-        tmp = {
-            'tm_rec':       [],
-            'rmsd_rec':     [],
-            'tm_dec':       [],
-            'rmsd_dec':     [],
-            'tm_gen':       [],
-            'rmsd_gen':     [],
-            'token_acc':    [],
-        }
-        preds = {}
+        generation_length = len(generated_token_ids[0])
+        prompt_length = len(inputs['input_ids'][0])
+        target_length = len(target_token_ids)
+        if generation_length != target_length:
+            logger.error(f"Generation length mismatch: generated {generation_length} vs target {target_length}, constraint {eval_min_new_tokens}")
+        
+        # decode generated tokens
+        prompt_str = self.processor.tokenizer.decode(inputs['input_ids'][0])
+        generated_str = self.processor.tokenizer.decode(generated_token_ids[0, prompt_length:])
+        target_str = self.processor.tokenizer.decode(target_token_ids[prompt_length:])
+        logger.info(f"=== Prompt ===\n{prompt_str}\n=== Generated ===\n{generated_str}\n=== Target ===\n{target_str}\n")
+        
+        pattern = rf'^{re.escape(tokenizer.bostruct_token)}(({tokenizer.struct_regex})+){re.escape(tokenizer.eostruct_token)}$'
+        skip_ar = re.match(pattern, generated_str) is None
+        if skip_ar:
+            logger.warning(f"Generated structure string does not match the expected format {pattern}")
+        
+        # metrics include
+        # - exposure loss
+        # - <vq, nature> tm-score/rmsd-local/rmsd-global
+        # - <ar, nature> tm-score/rmsd-local/rmsd-global
+        metrics = {}
+        
+        pdb_name = inputs['pdb_name'][0]
+        split = inputs['split'][0]
+        root, format = DATASET_RAW_ROOT[split]
+        metrics['split'] = DATASET_SPLIT[split] # due to transformer's param constraint
+        
+        exposure_loss: torch.Tensor = model(
+            input_ids=inputs['labels'],
+            attention_mask=inputs['attention_mask'],
+            labels=inputs['labels'],
+        ).loss
+        metrics['exposure_loss'] = exposure_loss.cpu().item()
+        
+        device = inputs['input_ids'].device
+        p_nature = OpenfoldProtein.from_file(Path(root)/f"{pdb_name}{format}").to(device)
+        p_vq = self.processor.multimodal_decode(target_token_ids, ref=p_nature)['entity'][0].to(device)
+        
+        tm_vq, rmsd_l_vq, rmsd_g_vq = self.processor.compute_tm_align(p_vq, p_nature, ref=p_nature)
+        metrics['tm_vq'] = tm_vq
+        metrics['rmsd_l_vq'] = rmsd_l_vq
+        metrics['rmsd_g_vq'] = rmsd_g_vq
 
-        for b in range(labels.size(0)):
-            x1: torch.Tensor = generated_token_ids[b][generated_token_ids[b] != -100]   # strip both left & right padding, [l]
-            x2: torch.Tensor = labels[b][labels[b] != -100]                             # strip both left padding, [l]
-            assert x1.size(0) == x2.size(0)
-            
-            o1 = self.processor.multimodal_decode(x1, ref=protein_collect[b])
-            o2 = self.processor.multimodal_decode(x2, ref=protein_collect[b])
-            
-            p1: OpenfoldProtein = o1['entity'][0]
-            p2: OpenfoldProtein = o2['entity'][0]
-            p3: OpenfoldProtein = protein_collect[b]
-            
-            tm_rec, rmsd_rec = self.processor.compute_tm_align(p2, p3, ref=p3)
-            tm_dec, rmsd_dec = self.processor.compute_tm_align(p1, p2, ref=p3)
-            tm_gen, rmsd_gen = self.processor.compute_tm_align(p1, p3, ref=p3)
-            tmp['tm_rec'].append(tm_rec)
-            tmp['rmsd_rec'].append(rmsd_rec)
-            tmp['tm_dec'].append(tm_dec)
-            tmp['rmsd_dec'].append(rmsd_dec)
-            tmp['tm_gen'].append(tm_gen)
-            tmp['rmsd_gen'].append(rmsd_gen)
-            
-            # token-accuracy
-            token_acc = x1.eq(x2).float().mean()
-            tmp['token_acc'].append(token_acc.cpu().item())
-            
-        # convert preds to tensor
-        for k in tmp.keys():
-            preds[k] = torch.tensor(tmp[k], device=device) # all batched [B]
-        preds['dev'] = inputs['dev'] # [B]
+        if not skip_ar:
+            p_ar = self.processor.multimodal_decode(generated_token_ids[0], ref=p_nature)['entity'][0].to(device)
+            tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
+        else:
+            tm_ar, rmsd_l_ar, rmsd_g_ar = 0.0, 20.0, 20.0 # dummy large value
+        metrics['tm_ar'] = tm_ar
+        metrics['rmsd_l_ar'] = rmsd_l_ar
+        metrics['rmsd_g_ar'] = rmsd_g_ar
         
+        # Summary Here
+        logger.info(f"""Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}]:
+Exposure Loss:  {metrics['exposure_loss']:.4f}
+VQ v.s. Nature: TM-score = {metrics['tm_vq']:.4f}, RMSD_L = {metrics['rmsd_l_vq']:.4f}, RMSD_G = {metrics['rmsd_g_vq']:.4f}
+AR v.s. Nature: TM-score = {metrics['tm_ar']:.4f}, RMSD_L = {metrics['rmsd_l_ar']:.4f}, RMSD_G = {metrics['rmsd_g_ar']:.4f}
+""")
         model.train()
-        return (exposure_loss, preds, labels)
+        preds = {k:torch.tensor(v).to(device) for k, v in metrics.items()} # metrics to tensor
+        return (exposure_loss, preds, inputs['input_ids'])
         
-
+        
 def lf_metrics(eval_pred: EvalPrediction):
     preds: Dict[str, np.ndarray] = eval_pred.predictions # type: ignore
     # group average by `dev` field in `preds`
     # add prefix `overfit`(when `dev`=1) or `test`(when `dev`=2)
     df = pd.DataFrame({k: v for k, v in preds.items()})
     metrics = {}
-    for dev, group in df.groupby('dev'):
-        if dev == 3: prefix = 'cameo2022'
-        elif dev == 2: prefix = 'evalx100'
-        elif dev == 1: prefix = 'overfitx100'
-        else: prefix = 'train'
-        metrics[f'{prefix}_tm_rec'] = group['tm_rec'].mean()
-        metrics[f'{prefix}_tm_dec'] = group['tm_dec'].mean()
-        metrics[f'{prefix}_tm_gen'] = group['tm_gen'].mean()
-        metrics[f'{prefix}_rmsd_rec'] = group['rmsd_rec'].mean()
-        metrics[f'{prefix}_rmsd_dec'] = group['rmsd_dec'].mean()
-        metrics[f'{prefix}_rmsd_gen'] = group['rmsd_gen'].mean()
-        metrics[f'{prefix}_token_acc'] = group['token_acc'].mean()
+    for i, group in df.groupby('split'):
+        prefix = list(DATASET_SPLIT.keys())[int(i)] # type: ignore
+        metrics[f'{prefix}/exposure_loss'] = group['exposure_loss'].mean()
+        metrics[f'{prefix}/tm_vq'] = group['tm_vq'].mean()
+        metrics[f'{prefix}/rmsd_l_vq'] = group['rmsd_l_vq'].mean()
+        metrics[f'{prefix}/rmsd_g_vq'] = group['rmsd_g_vq'].mean()
+        metrics[f'{prefix}/tm_ar'] = group['tm_ar'].mean()
+        metrics[f'{prefix}/rmsd_l_ar'] = group['rmsd_l_ar'].mean()
+        metrics[f'{prefix}/rmsd_g_ar'] = group['rmsd_g_ar'].mean()
     return metrics
 
 
+# Implementation of SFT trainer
 @hydra.main(version_base=None, config_path="./config", config_name="config.yaml")
-def main(config: DictConfig):
+def sft(config: DictConfig):
     
+    start_time = time.time()
     config_dataset, config_lm, config_trainer = config.dataset, config.lm, config.trainer
-    config.name = "M{}_D{}_B{}x{}x{}".format(
+    config.name = "{}@{}@{}".format(
         config_lm.get('model_type', 'dummy'),
         config_dataset.get('dataset_type', 'dummy'),
-        int(os.environ["WORLD_SIZE"]), 'dyn', config_trainer.get('gradient_accumulation_steps', 1)
+        int(os.environ["WORLD_SIZE"]),
     )
     config_trainer.output_dir = str(Path(__file__).parent/f'output/checkpoints/{config.name}')
     if (rank := int(os.environ.get("RANK", 0))) == 0:
         wandb.init(project="LLMFolding", name=config.name, config=OmegaConf.to_container(config, resolve=True)) # type: ignore
+    elapsed = time.time() - start_time
+    logger.info(f'[{int(elapsed)}s] Loaded config ...')
     
-    # exp1: dplm tokenizer + progen2 lm + dplm dataset
-    # exp2: dist tokenizer + progen2 lm + dist dataset
+    
+    start_time = time.time()
+    dataset_eval = load_dataset('json', streaming=False, split='train', data_files=config_dataset.fpath_eval)
+    dataset_train = load_dataset('json', streaming=True, split='train', data_files=config_dataset.fpath_train)
+    elapsed = time.time() - start_time
+    logger.info(f'[{int(elapsed)}s] Loaded dataset ...\n- {config_dataset.fpath_train}\n- {config_dataset.fpath_eval}')
+    
+    
+    start_time = time.time()
     protein_tokenizer = {
         "dist": DistMatrixTokenizer,
         "dplm": DPLMProteinTokenizer,
-    }[str(config_dataset.dataset_type).split('_')[-1]].get_instance()
-    text_tokenizer = TextTokenizer(
-        tokenizer_object=Tokenizer.from_file(str(Path(__file__).parent/'utils/progen2_utils/progen/progen2/tokenizer.json')),
-        pad_token='<|pad|>',
-        bos_token='<|bos|>',
-        eos_token='<|eos|>',
-        padding_side='left',
-        struct_vsz=protein_tokenizer.vsz,
+    }[str(config_dataset.type)].get_instance()
+    qwen2_tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained(config_lm.model_dir)
+    qwen2_tokenizer.padding_side = "left"
+    qwen2_tokenizer.truncation_side = "right"
+    qwen2_tokenizer.boseq_token = '<seq>'
+    qwen2_tokenizer.eoseq_token = '</seq>'
+    qwen2_tokenizer.bostruct_token = '<struct>'
+    qwen2_tokenizer.eostruct_token = '</struct>'
+    qwen2_tokenizer.struct_regex = r"<\|s(\d{4})\|>"
+    qwen2_tokenizer.struct_template = "<|s{token_id:0>4d}|>"
+    qwen2_tokenizer.struct_vsz = protein_tokenizer.vsz
+    qwen2_tokenizer.add_special_tokens({
+        'additional_special_tokens': \
+        [qwen2_tokenizer.boseq_token, qwen2_tokenizer.eoseq_token, qwen2_tokenizer.bostruct_token, qwen2_tokenizer.eostruct_token] + \
+        [qwen2_tokenizer.struct_template.format(token_id=i) for i in range(qwen2_tokenizer.struct_vsz)] # type: ignore
+    }, replace_additional_special_tokens=False)
+    qwen2_tokenizer.boseq_token_id = qwen2_tokenizer.convert_tokens_to_ids(qwen2_tokenizer.boseq_token)
+    qwen2_tokenizer.eoseq_token_id = qwen2_tokenizer.convert_tokens_to_ids(qwen2_tokenizer.eoseq_token)
+    qwen2_tokenizer.bostruct_token_id = qwen2_tokenizer.convert_tokens_to_ids(qwen2_tokenizer.bostruct_token)
+    qwen2_tokenizer.eostruct_token_id = qwen2_tokenizer.convert_tokens_to_ids(qwen2_tokenizer.eostruct_token)
+    elapsed = time.time() - start_time
+    logger.info(f'[{int(elapsed)}s] Loaded and updated tokenizers ...')
+    
+    
+    start_time = time.time()
+    qwen3_model = AutoModelForCausalLM.from_pretrained(
+        config_lm.model_dir,
+        dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2"
     )
-    processor = ProteinProcessor(
-        tokenizer=text_tokenizer,
-        struct_tokenizer=protein_tokenizer
-    )
+    # HINT: `len(tokenizer)` is always right, rather than `vocab_size`
+    qwen3_model.resize_token_embeddings(len(qwen2_tokenizer))
+    elapsed = time.time() - start_time
+    logger.info(f'[{int(elapsed)}s] Loaded and updated model ...')
     
-    # find any file ends with `.pt` `.pth` `.bin` under the model_dir
-    model_dir = Path(config_lm.model_dir)
-    model_files = list(model_dir.rglob("*.pt")) + list(model_dir.rglob("*.pth")) + list(model_dir.rglob("*.bin")) + list(model_dir.rglob("*.safetensors"))
     
-    # https://github.com/enijkamp/progen2
-    if config_lm.model_type.startswith('progen'):
-        from utils.progen2_utils import ProGenForCausalLM, ProGenConfig
-        if config_lm.model_type.endswith('scratch'):
-            logger.info('Training ProGen2 from scratch ...')
-            model = ProGenForCausalLM(config=ProGenConfig.from_pretrained(model_dir))
-        else:
-            logger.info(f'Loading ProGen2 from {model_dir} ...')
-            model = ProGenForCausalLM.from_pretrained(model_dir, torch_dtype=torch.float32) # type: ignore
-        
-        if config_trainer.get('gradient_checkpointing', True):
-            logger.warning(
-                'Progen2 transformers gradient_checkpointing API not implemented yet, manually enable gradient_checkpoint config instead'
-            )
-            OmegaConf.set_struct(config_trainer, False)
-            config_trainer.pop("gradient_checkpointing", False)
-            OmegaConf.set_struct(config_trainer, True)
-            model.transformer.config.gradient_checkpointing = True
-        model.resize_token_embeddings(text_tokenizer.vocab_size)
-
-    # https://github.com/QwenLM/Qwen3
-    elif config_lm.model_type.startswith('qwen'):
-        from transformers import AutoConfig, AutoModelForCausalLM, AutoModel
-        if config_lm.model_type.endswith('scratch'):
-            logger.info('Training Qwen3 from scratch ...')
-            model = AutoModel.from_config(AutoConfig.from_pretrained(model_dir), attn_implementation="flash_attention_2")
-            model.config.bos_token_id = text_tokenizer.bos_token_id
-            model.config.eos_token_id = text_tokenizer.eos_token_id
-            model.config.pad_token_id = text_tokenizer.pad_token_id
-            model.config.vocab_size = text_tokenizer.vocab_size
-            model.resize_token_embeddings(text_tokenizer.vocab_size)
-        
-        else:
-            logger.info(f'[Info] Loading Qwen3 from {model_dir} ...')
-            model = AutoModelForCausalLM.from_pretrained(
-                model_dir,
-                torch_dtype=torch.bfloat16,
-                attn_implementation="flash_attention_2"
-            )
-            model.config.bos_token_id = text_tokenizer.bos_token_id
-            model.config.eos_token_id = text_tokenizer.eos_token_id
-            model.config.pad_token_id = text_tokenizer.pad_token_id
-            model.resize_token_embeddings(text_tokenizer.vocab_size)
-            
-    # Update: we now loading dataset from parquet files
-    features = Features({
-        'split':        Value('string'),
-        'pdb_name':     Value('string'),
-        'plddt':        Value('float32'),
-        'text':         Value('string'),
-        'prompt':       Value('string'),
-        'seq_length':   Value('int32'),
-        'struct_length': Value('int32'),
-        'total_length': Value('int32'),
-    })
-    
-    # TODO consider filtering, length? reoslution? 
-    ds = load_dataset("parquet", data_files=config_dataset.dplm_dataset_path, split="train", features=features) # type: ignore
-    ds_dev = ds.filter(lambda x: x["split"] != "cameo2022")
-    ds_test = ds.filter(lambda x: x["split"] == "cameo2022")
-    dev = ds_dev.train_test_split(test_size=100, seed=2025)      # type: ignore
-    ds_train, ds_eval = dev['train'], dev['test']
-    overfit_dev = ds_train.train_test_split(test_size=100, seed=2025) # type: ignore
-    ds_overfit = overfit_dev['test']
-    
-    # filter with plddt > 90
-    # ds = load_dataset("parquet", data_files=config_dataset.afdb_dataset_path, split="train", features=features) # type: ignore
-    # ds = ds.filter(lambda x: x["plddt"] >= 90.0)
-    # ds_train = datasets.concatenate_datasets([ds_train, ds]) # type: ignore
-    
-    # however we need to add a new field 'dev' to distinguish them
-    # for train 'dev' = 0, for overfit 'dev' = 1, for eval 'dev' = 2, for test 'dev' = 3
-    ds_train = ds_train.add_column("dev", [0] * ds_train.num_rows) # type: ignore
-    ds_overfit = ds_overfit.add_column("dev", [1] * ds_overfit.num_rows) # type: ignore
-    ds_eval = ds_eval.add_column("dev", [2] * ds_eval.num_rows) # type: ignore
-    ds_test = ds_test.add_column("dev", [3] * ds_test.num_rows) # type: ignore
-
-    train_dataset = ds_train
-    eval_dataset = datasets.concatenate_datasets([ds_overfit, ds_eval, ds_test]) # type: ignore
-    
-    # training process
-    model.train()
-    model._dynamic_tied_weights_keys = {'lm_head.weight', 'transformer.wte.weight'}
-    training_args = TrainingArguments(**config_trainer, remove_unused_columns=False)
-    trainer = LFTrainer(
-        processor=processor,
-        model=model,
-        train_collator=TextCollator(processor, eval_mode=False),
-        eval_collator=TextCollator(processor, eval_mode=True),
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+    start_time = time.time()
+    # WARN: for packing we have to use <|endoftext|> rather than <|im_end|>
+    eod_token, eos_token = qwen2_tokenizer.pad_token, qwen2_tokenizer.eos_token
+    qwen2_tokenizer.eos_token = eod_token
+    qwen2_tokenizer.eos_token_id = qwen2_tokenizer.pad_token_id
+    protein_processor = ProteinProcessor(qwen2_tokenizer, protein_tokenizer)
+    sft_trainer = SFTTrainerWithEval(
+        processor=protein_processor,
+        model=qwen3_model,
+        tokenizer=qwen2_tokenizer,
+        args=SFTConfig(**config_trainer),
+        train_dataset=dataset_train, # type: ignore
+        eval_dataset=dataset_eval,   # type: ignore
+        eval_packing=False,
+        eval_collator=ExtraColumnCollator(),
         compute_metrics=lf_metrics,
     )
-    trainer.train()
+    sft_trainer.train() # type: ignore
+    elapsed = time.time() - start_time
+    logger.info(f'[{int(elapsed)}s] Finished SFT training ...')
 
 
 if __name__ == "__main__":
-    main()
+    sft()

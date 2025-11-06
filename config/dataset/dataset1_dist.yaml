@@ -1,3 +1,0 @@
-dataset_type:   dataset1_dist
-dplm_dataset_path:    /GenSIvePFS/users/lutianyu/lf/data/dist_v2.parquet
-afdb_dataset_path:    /GenSIvePFS/users/lutianyu/data/AFDB/parquet/part-02/dataset_merged.parquet
