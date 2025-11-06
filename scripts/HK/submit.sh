@@ -91,7 +91,7 @@ if [ -d "$OPENFOLD_DIR" ]; then
         echo "✅ openfold already installed, skip."
     else
         echo "⬇️ Installing local openfold..."
-        $PIP install -e "$OPENFOLD_DIR" \
+        $PIP install "$OPENFOLD_DIR" \
             --trusted-host pypi.org \
             --trusted-host pypi.python.org \
             --trusted-host files.pythonhosted.org
