@@ -4,7 +4,6 @@ from typing import Any, Dict, Optional, List, Text, Tuple, cast
 import os
 from pathlib import Path
 import warnings
-from h11 import Data
 import wandb
 import pandas as pd
 
@@ -12,9 +11,6 @@ import numpy as np
 import torch
 import torch.utils
 import torch.utils.data
-import torch.distributed as dist
-from torch.nn import CrossEntropyLoss
-from torch.optim import AdamW
 
 import hydra
 import logging
