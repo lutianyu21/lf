@@ -1,0 +1,8 @@
+type: dist
+fpath_train:    
+  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train_split_00.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train_split_01.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train_split_02.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train_split_03.json
+fpath_eval:     
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval.json
