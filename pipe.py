@@ -1,3 +1,4 @@
+from math import log
 import re
 import time
 from typing import Any, Dict, Optional, List, Text, Tuple, cast
@@ -46,7 +47,7 @@ from utils.lf_utils import (
     SortishApproxBatchDataloader,
     TextCollator,
     ExtraColumnCollator,
-    DynamicMultimodalLogitsProcessor,
+    UnbatchedModalityLogitsProcessorBase,
     DATASET_SPLIT, DATASET_RAW_ROOT,
 )
 
@@ -205,45 +206,40 @@ class SFTTrainerWithEval(SFTTrainer):
         tokenizer = self.processor.tokenizer
         
         # update generation config
-        eval_max_new_tokens = inputs['struct_length'][0].item()
-        eval_min_new_tokens = inputs['struct_length'][0].item()
+        # eval_max_new_tokens = inputs['struct_length'][0].item()
+        # eval_min_new_tokens = inputs['struct_length'][0].item()
         eval_config = GenerationConfig(
             use_cache=True,
             eos_token_id=tokenizer.eos_token_id,
             pad_token_id=tokenizer.pad_token_id,
             do_sample=False,
-            max_new_tokens=eval_max_new_tokens,
-            min_new_tokens=eval_min_new_tokens,
+            max_new_tokens=8192,
         )
 
+        logits_processor = UnbatchedModalityLogitsProcessorBase(
+            **self.processor.constant_helper(),
+            processor=self.processor,
+            templates=[
+                ('struct', inputs['struct_length'][0].item()),
+            ]
+        )
         generated_token_ids: torch.Tensor = model.generate(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
             generation_config=eval_config,
+            logits_processor=[logits_processor],
         ) # type: ignore [B, L] where B = 1 for now
         target_token_ids = inputs['labels'][0]
-        
-        # for regex, append a '</struct>' token at the end if not present
-        if not generated_token_ids[0].tolist()[-1] == tokenizer.eostruct_token_id:
-            generated_token_ids = torch.cat([
-                generated_token_ids,
-                torch.tensor([[tokenizer.eostruct_token_id]], device=generated_token_ids.device)
-            ], dim=1)
-        
-        generation_length = len(generated_token_ids[0])
         prompt_length = len(inputs['input_ids'][0])
-        target_length = len(target_token_ids)
-        if generation_length != target_length:
-            logger.error(f"Generation length mismatch: generated {generation_length} vs target {target_length}, constraint {eval_min_new_tokens}")
-        
+                        
         # decode generated tokens
         prompt_str = self.processor.tokenizer.decode(inputs['input_ids'][0])
         generated_str = self.processor.tokenizer.decode(generated_token_ids[0, prompt_length:])
         target_str = self.processor.tokenizer.decode(target_token_ids[prompt_length:])
         logger.info(f"=== Prompt ===\n{prompt_str}\n=== Generated ===\n{generated_str}\n=== Target ===\n{target_str}\n")
         
-        pattern = rf'^{re.escape(tokenizer.bostruct_token)}(({tokenizer.struct_regex})+){re.escape(tokenizer.eostruct_token)}$'
-        skip_ar = re.match(pattern, generated_str) is None
+        pattern = re.compile(rf"(<struct>(?:{self.processor.tokenizer.struct_regex})+</struct>)")
+        skip_ar = len(pattern.findall(generated_str)) == 0
         if skip_ar:
             logger.warning(f"Generated structure string does not match the expected format {pattern}")
         
@@ -357,6 +353,12 @@ def sft(config: DictConfig):
         [qwen2_tokenizer.boseq_token, qwen2_tokenizer.eoseq_token, qwen2_tokenizer.bostruct_token, qwen2_tokenizer.eostruct_token] + \
         [qwen2_tokenizer.struct_template.format(token_id=i) for i in range(qwen2_tokenizer.struct_vsz)] # type: ignore
     }, replace_additional_special_tokens=False)
+    qwen2_tokenizer.seq_vocab_ids = qwen2_tokenizer.convert_tokens_to_ids([
+        'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'    
+    ])
+    qwen2_tokenizer.struct_vocab_ids = qwen2_tokenizer.convert_tokens_to_ids([
+        qwen2_tokenizer.struct_template.format(token_id=i) for i in range(qwen2_tokenizer.struct_vsz)
+    ])
     qwen2_tokenizer.boseq_token_id = qwen2_tokenizer.convert_tokens_to_ids(qwen2_tokenizer.boseq_token)
     qwen2_tokenizer.eoseq_token_id = qwen2_tokenizer.convert_tokens_to_ids(qwen2_tokenizer.eoseq_token)
     qwen2_tokenizer.bostruct_token_id = qwen2_tokenizer.convert_tokens_to_ids(qwen2_tokenizer.bostruct_token)

@@ -95,9 +95,8 @@ class ProteinProcessor(ProcessorMixin):
         
         # HINTL token_ids is left-padded, and kwargs might be right padded depending on tokenizer call
         # specifying additional kwargs for structure decoding e.g. residue_mask
-        
         string = self.tokenizer.decode(token_ids)
-        pattern = rf'^{re.escape(self.tokenizer.bostruct_token)}(({self.tokenizer.struct_regex})+){re.escape(self.tokenizer.eostruct_token)}$'
+        pattern = re.compile(rf"(<struct>(?:{self.tokenizer.struct_regex})+</struct>)")
         chunks = re.split(pattern, string)
         seq_output, struct_output, entity_output = [], [], []
         
@@ -123,35 +122,32 @@ class ProteinProcessor(ProcessorMixin):
             'entity':       entity_output
         }
     
-    def constant_helper(self) -> Dict[str, int | List[int] | Any]:
+    def constant_helper(self) -> Dict[str, Any]:
         (
-            pad_token,
-            boseq_token,
-            eoseq_token,
-            bostruct_token,
-            eostruct_token,
-            bos_token,
-            eos_token,
+            pad_token_id,
+            boseq_token_id,
+            eoseq_token_id,
+            bostruct_token_id,
+            eostruct_token_id,
+            eos_token_id,
         ) = self.tokenizer.encode(''.join([
             self.tokenizer.pad_token,
             self.tokenizer.boseq_token,
             self.tokenizer.eoseq_token,
             self.tokenizer.bostruct_token,
             self.tokenizer.eostruct_token,
-            self.tokenizer.bos_token,
             self.tokenizer.eos_token,
         ]))
         
         seq_vocab_ids = self.tokenizer.seq_vocab_ids
         struct_vocab_ids = self.tokenizer.struct_vocab_ids
         return {
-            'pad_token': pad_token,
-            'boseq_token': boseq_token,
-            'eoseq_token': eoseq_token,
-            'bostruct_token': bostruct_token,
-            'eostruct_token': eostruct_token,
-            'bos_token': bos_token,
-            'eos_token': eos_token,
+            'pad_token_id': pad_token_id,
+            'boseq_token_id': boseq_token_id,
+            'eoseq_token_id': eoseq_token_id,
+            'bostruct_token_id': bostruct_token_id,
+            'eostruct_token_id': eostruct_token_id,
+            'eos_token_id': eos_token_id,
             'seq_vocab_ids': seq_vocab_ids,
             'struct_vocab_ids': struct_vocab_ids
         }
