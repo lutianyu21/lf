@@ -71,7 +71,6 @@ pip config list
 
 PIP=/root/miniconda3/envs/qwen3/bin/pip
 export TMPDIR=/GenSIvePFS/users/lutianyu/tmp
-mkdir -p $TMPDIR
 
 $PIP install trl==0.9.6 \
     --trusted-host pypi.org \
