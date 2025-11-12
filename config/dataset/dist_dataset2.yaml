@@ -1,9 +1,9 @@
 type: dist
 fpath_train:    
-  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train/split_00.json
-  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train/split_01.json
-  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train/split_02.json
-  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train/split_03.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train/split_00.jsonl
+  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train/split_01.jsonl
+  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train/split_02.jsonl
+  - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/train/split_03.jsonl
 fpath_eval:     
   - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/eval/cameo2022.json
   - /GenSIvePFS/users/lutianyu/lf/dataset/afdb90/eval/casp15.json
