@@ -18,6 +18,7 @@
 *.cache
 *.pdb
 *.m8
+*.json
 
 # slink
 **/rcsb
@@ -28,6 +29,7 @@
 
 /cache
 /pytest
+/dataset
 
 # still developing
 /infra

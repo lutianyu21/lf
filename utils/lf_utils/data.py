@@ -1,27 +1,29 @@
-from cProfile import label
 from typing import Any, Callable, Dict, Iterable, List
 
 import math
+import warnings
+import random
 import numpy as np
 import torch
 import torch.utils
 import torch.utils.data
 import torch.distributed as dist
 from transformers import Qwen2TokenizerFast
+from trl.trainer.utils import ConstantLengthDataset
 
 from .constant import DATASET_SPLIT
 from .protein_processor import ProteinProcessor
 
 __all__ = [
-    'TextCollator',
     'ExtraColumnCollator',
-    'SortishApproxBatchDataloader'
+    'ItemwiseConstantLengthDataset',
 ]
 
 
 
 
 class ExtraColumnCollator:
+    # handle extra columns in multi-modal dataset
     def __init__(self):
         pass
         
@@ -36,6 +38,78 @@ class ExtraColumnCollator:
             seq_length=torch.tensor(list(map(lambda x: x["seq_length"], batch))),
             struct_length=torch.tensor(list(map(lambda x: x["struct_length"], batch)))
         )
+        
+class ItemwiseConstantLengthDataset(ConstantLengthDataset):
+    # unlike ConstantLengthDataset, this class will make sure that each yielded
+    # example starts as a complete item from the original dataset(still packing multiple items)
+    def __iter__(self):
+        iterator = iter(self.dataset)
+        more_examples = True
+        while more_examples:
+            buffer, buffer_len = [], 0
+            while True:
+                if buffer_len >= self.max_buffer_size:
+                    break
+                try:
+                    buffer.append(self.formatting_func(next(iterator)))
+                    buffer_len += len(buffer[-1])
+                except StopIteration:
+                    if self.infinite:
+                        iterator = iter(self.dataset)
+                        warnings.warn("The dataset reached end and the iterator is reset to the start.")
+                    else:
+                        more_examples = False
+                        break
+            tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
+                "input_ids"
+            ]
+            
+            # Original Implementation:
+            # |-----d1-----|----d2----|---d3--
+            # -d3|----d4----|-----d5-----|-d6-
+            # all_token_ids = []
+            # for tokenized_input in tokenized_inputs:
+            #     if self.append_concat_token:
+            #         tokenized_input = tokenized_input + [self.concat_token_id]
+            #     all_token_ids.extend(tokenized_input)
+            # examples = []
+            # for i in range(0, len(all_token_ids), self.seq_length):
+            #     input_ids = all_token_ids[i : i + self.seq_length]
+            #     if len(input_ids) == self.seq_length:
+            #         examples.append(input_ids)
+            # if self.shuffle:
+            #     random.shuffle(examples)
+            # for example in examples:
+            #     self.current_size += 1
+            #     yield {
+            #         "input_ids": torch.LongTensor(example),
+            #         "labels": torch.LongTensor(example),
+            #     }
+            
+            # Modified Implementation:
+            # |-----d1-----|----d2----|---d3--
+            # |----d4----|-----d5-----|-d6-|--
+            examples = []
+            lines = []
+            for tokenized_input in tokenized_inputs:
+                if self.append_concat_token:
+                    tokenized_input = tokenized_input + [self.concat_token_id]
+                lines.extend(tokenized_input)
+                if len(lines) >= self.seq_length:
+                    examples.append(lines[:self.seq_length])
+                    lines = [] # truncate the remaining
+            if self.shuffle:
+                random.shuffle(examples)
+            for example in examples:
+                self.current_size += 1
+                yield {
+                    "input_ids": torch.LongTensor(example),
+                    "labels": torch.LongTensor(example),
+                }
+                    
+            
+            
+
 
 
 

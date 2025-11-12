@@ -1,7 +1,6 @@
-from math import log
 import re
 import time
-from typing import Any, Dict, Optional, List, Text, Tuple, cast
+from typing import Any, Dict, Optional, List, Text, Tuple, Union, cast
 import os
 from pathlib import Path
 import warnings
@@ -12,6 +11,7 @@ import numpy as np
 import torch
 import torch.utils
 import torch.utils.data
+import torch.nn as nn
 
 import hydra
 import logging
@@ -33,6 +33,7 @@ from transformers import (
 )
 from transformers.generation.configuration_utils import GenerationConfig
 from trl import SFTTrainer, SFTConfig
+from trl.trainer.utils import ConstantLengthDataset
 
 
 
@@ -44,8 +45,7 @@ from utils.lf_utils import (
     DPLMProteinTokenizer,
     TextTokenizer,
     ProteinProcessor, 
-    SortishApproxBatchDataloader,
-    TextCollator,
+    ItemwiseConstantLengthDataset,
     ExtraColumnCollator,
     UnbatchedModalityLogitsProcessorBase,
     DATASET_SPLIT, DATASET_RAW_ROOT,
@@ -85,6 +85,19 @@ class SFTTrainerWithEval(SFTTrainer):
         super().__init__(*args, **kwargs)
         self.processor = processor
         self.eval_collator = eval_collator
+        
+    def compute_loss(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        return_outputs: bool = False,
+        num_items_in_batch: Optional[torch.Tensor] = None,
+    ):
+        # decode inputs into string to debug
+        print(inputs['input_ids'].shape)
+
+        return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+        
     
     ## overide to support extra columns ##
     # - keep any extra columns
@@ -119,6 +132,57 @@ class SFTTrainerWithEval(SFTTrainer):
         if self.args.dataloader_persistent_workers:
             self._eval_dataloader = eval_dataloader
         return self.accelerator.prepare(eval_dataloader)
+    
+    def _prepare_packed_dataloader(
+        self,
+        tokenizer,
+        dataset,
+        dataset_text_field,
+        max_seq_length,
+        num_of_sequences,
+        chars_per_token,
+        formatting_func=None,
+        append_concat_token=True,
+        add_special_tokens=True,
+    ):
+        if dataset_text_field is not None or formatting_func is not None:
+            if tokenizer is None:
+                raise ValueError("You need to pass a tokenizer when using `dataset_text_field` with `SFTTrainer`.")
+
+            constant_length_iterator = ItemwiseConstantLengthDataset(
+                tokenizer,
+                dataset,
+                dataset_text_field=dataset_text_field,
+                formatting_func=formatting_func,
+                seq_length=max_seq_length,
+                infinite=False,
+                num_of_sequences=num_of_sequences,
+                chars_per_token=chars_per_token,
+                eos_token_id=tokenizer.eos_token_id,
+                append_concat_token=append_concat_token,
+                add_special_tokens=add_special_tokens,
+            )
+
+            if isinstance(dataset, datasets.IterableDataset):
+                return constant_length_iterator
+
+            def data_generator(constant_length_iterator):
+                yield from constant_length_iterator
+
+            try:
+                packed_dataset = Dataset.from_generator(
+                    data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
+                )
+            except (DatasetGenerationError, SchemaInferenceError) as exc: # type: ignore
+                raise ValueError(
+                    "Error occurred while packing the dataset. "
+                    "Make sure that your dataset has enough samples to at least yield one packed sequence."
+                ) from exc
+            return packed_dataset
+        else:
+            raise ValueError(
+                "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
+            )
     
     def _prepare_non_packed_dataloader(
         self,
@@ -243,7 +307,7 @@ class SFTTrainerWithEval(SFTTrainer):
         if skip_ar:
             logger.warning(f"Generated structure string does not match the expected format {pattern}")
         
-        # metrics include
+        # metrics include:
         # - exposure loss
         # - <vq, nature> tm-score/rmsd-local/rmsd-global
         # - <ar, nature> tm-score/rmsd-local/rmsd-global
@@ -314,11 +378,6 @@ def sft(config: DictConfig):
     
     start_time = time.time()
     config_dataset, config_lm, config_trainer = config.dataset, config.lm, config.trainer
-    config.name = "{}@{}@{}".format(
-        config_lm.get('model_type', 'dummy'),
-        config_dataset.get('dataset_type', 'dummy'),
-        int(os.environ["WORLD_SIZE"]),
-    )
     config_trainer.output_dir = str(Path(__file__).parent/f'output/checkpoints/{config.name}')
     if (rank := int(os.environ.get("RANK", 0))) == 0:
         wandb.init(project="LLMFolding", name=config.name, config=OmegaConf.to_container(config, resolve=True)) # type: ignore
@@ -329,6 +388,7 @@ def sft(config: DictConfig):
     start_time = time.time()
     dataset_eval = load_dataset('json', streaming=False, split='train', data_files=config_dataset.fpath_eval)
     dataset_train = load_dataset('json', streaming=True, split='train', data_files=config_dataset.fpath_train)
+    dataset_train = dataset_train.shuffle(seed=2025)
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Loaded dataset ...\n- {config_dataset.fpath_train}\n- {config_dataset.fpath_eval}')
     

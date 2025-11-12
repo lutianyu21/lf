@@ -1,10 +1,10 @@
 defaults:
   - _self_
-  - dataset: dist_dataset2
+  - dataset: dist_dataset1
   - lm: qwen3
   - trainer: sft
 
-name: dummy
+name: job1
 dataset:
   train_task: folding_lm
   eval_task: folding_lm
