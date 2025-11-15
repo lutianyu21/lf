@@ -1,13 +1,10 @@
 defaults:
   - _self_
-  - dataset: dist_dataset1
+  - dataset: rcsb+swissprot
   - lm: qwen3
   - trainer: sft
 
-name: job1
-dataset:
-  train_task: folding_lm
-  eval_task: folding_lm
+name: qwen3@rcsb+swissprot@folding
 
 hydra:
   output_subdir: null

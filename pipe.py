@@ -1,9 +1,13 @@
 import re
 import time
+import hydra
+import logging
+import colorlog
 from typing import Any, Dict, Optional, List, Text, Tuple, Union, cast
 import os
 from pathlib import Path
 import warnings
+from regex import P
 import wandb
 import pandas as pd
 
@@ -13,12 +17,16 @@ import torch.utils
 import torch.utils.data
 import torch.nn as nn
 
-import hydra
-import logging
-import colorlog
 from omegaconf import OmegaConf, DictConfig
 import datasets
-from datasets import Dataset, load_dataset, Features, Value, ClassLabel, Sequence
+from datasets import (
+    Features,
+    Value,
+    Dataset,
+    IterableDataset,
+    load_dataset,
+    interleave_datasets,
+)
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
@@ -35,8 +43,6 @@ from transformers.generation.configuration_utils import GenerationConfig
 from trl import SFTTrainer, SFTConfig
 from trl.trainer.utils import ConstantLengthDataset
 
-
-
 from utils.dplm_utils.dplm.generate_dplm import generate
 from utils.lf_utils.protein_tokenizer import DistMatrixTokenizer
 from utils.openfold_utils import OpenfoldProtein
@@ -49,6 +55,7 @@ from utils.lf_utils import (
     ExtraColumnCollator,
     UnbatchedModalityLogitsProcessorBase,
     DATASET_SPLIT, DATASET_RAW_ROOT,
+    PackingFoldingTrainer,
 )
 
 # log color whenrank=0 & silent when rank>0
@@ -72,306 +79,6 @@ logger.propagate = False
 
 
 
-
-class SFTTrainerWithEval(SFTTrainer):
-    
-    def __init__(
-        self,
-        processor: ProteinProcessor,
-        eval_collator: ExtraColumnCollator,
-        *args,
-        **kwargs
-    ):
-        super().__init__(*args, **kwargs)
-        self.processor = processor
-        self.eval_collator = eval_collator
-        
-    def compute_loss(
-        self,
-        model: nn.Module,
-        inputs: dict[str, Union[torch.Tensor, Any]],
-        return_outputs: bool = False,
-        num_items_in_batch: Optional[torch.Tensor] = None,
-    ):
-        # decode inputs into string to debug
-        print(inputs['input_ids'].shape)
-
-        return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
-        
-    
-    ## overide to support extra columns ##
-    # - keep any extra columns
-    # - batch-size = 1, since we have to constraint generation length
-    
-    def get_eval_dataloader(self, eval_dataset: Any = None) -> torch.utils.data.DataLoader:
-        if eval_dataset is None and self.eval_dataset is None:
-            raise ValueError("Trainer: evaluation requires an eval_dataset.")
-
-        # If we have persistent workers, don't do a fork bomb especially as eval datasets
-        # don't change during training
-        if hasattr(self, "_eval_dataloader") and self.args.dataloader_persistent_workers:
-            return self.accelerator.prepare(self._eval_dataloader)
-        eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
-        data_collator = self.eval_collator
-        dataloader_params = {
-            "batch_size": self.args.eval_batch_size,
-            "collate_fn": data_collator,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
-        }
-
-        if not isinstance(eval_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["sampler"] = self._get_eval_sampler(eval_dataset)
-            dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
-
-        # accelerator.free_memory() will destroy the references, so
-        # we need to store the non-prepared version
-        eval_dataloader = torch.utils.data.DataLoader(eval_dataset, **dataloader_params)
-        if self.args.dataloader_persistent_workers:
-            self._eval_dataloader = eval_dataloader
-        return self.accelerator.prepare(eval_dataloader)
-    
-    def _prepare_packed_dataloader(
-        self,
-        tokenizer,
-        dataset,
-        dataset_text_field,
-        max_seq_length,
-        num_of_sequences,
-        chars_per_token,
-        formatting_func=None,
-        append_concat_token=True,
-        add_special_tokens=True,
-    ):
-        if dataset_text_field is not None or formatting_func is not None:
-            if tokenizer is None:
-                raise ValueError("You need to pass a tokenizer when using `dataset_text_field` with `SFTTrainer`.")
-
-            constant_length_iterator = ItemwiseConstantLengthDataset(
-                tokenizer,
-                dataset,
-                dataset_text_field=dataset_text_field,
-                formatting_func=formatting_func,
-                seq_length=max_seq_length,
-                infinite=False,
-                num_of_sequences=num_of_sequences,
-                chars_per_token=chars_per_token,
-                eos_token_id=tokenizer.eos_token_id,
-                append_concat_token=append_concat_token,
-                add_special_tokens=add_special_tokens,
-            )
-
-            if isinstance(dataset, datasets.IterableDataset):
-                return constant_length_iterator
-
-            def data_generator(constant_length_iterator):
-                yield from constant_length_iterator
-
-            try:
-                packed_dataset = Dataset.from_generator(
-                    data_generator, gen_kwargs={"constant_length_iterator": constant_length_iterator}
-                )
-            except (DatasetGenerationError, SchemaInferenceError) as exc: # type: ignore
-                raise ValueError(
-                    "Error occurred while packing the dataset. "
-                    "Make sure that your dataset has enough samples to at least yield one packed sequence."
-                ) from exc
-            return packed_dataset
-        else:
-            raise ValueError(
-                "You need to pass a `dataset_text_field` or `formatting_func` argument to the SFTTrainer if you want to use the `ConstantLengthDataset`."
-            )
-    
-    def _prepare_non_packed_dataloader(
-        self,
-        tokenizer,
-        dataset,
-        dataset_text_field,
-        max_seq_length,
-        formatting_func: Any = None,
-        add_special_tokens=True,
-        remove_unused_columns=False,
-    ):
-        
-        use_formatting_func = formatting_func is not None and dataset_text_field is None
-        self._dataset_sanity_checked = False
-
-        # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
-        def tokenize(element):
-            outputs = tokenizer(
-                element["text"] if not use_formatting_func else formatting_func(element),
-                add_special_tokens=add_special_tokens,
-                truncation='prompt' not in element.keys(), # True for training; False for eval
-                padding=False,
-                max_length=max_seq_length,
-                return_overflowing_tokens=False,
-                return_length=False,
-            )
-
-            if use_formatting_func and not self._dataset_sanity_checked:
-                if not isinstance(formatting_func(element), list):
-                    raise ValueError(
-                        "The `formatting_func` should return a list of processed strings since it can lead to silent bugs."
-                    )
-                else:
-                    self._dataset_sanity_checked = True
-            # keep any other columns besides signature columns +++
-            if 'prompt' in element.keys():
-                outputs_prompt = tokenizer(
-                    element["prompt"] if not use_formatting_func else formatting_func(element),
-                    add_special_tokens=add_special_tokens,
-                    truncation=False,
-                    padding=False,
-                    max_length=max_seq_length,
-                    return_overflowing_tokens=False,
-                    return_length=False,
-                )
-                outputs['labels'] = outputs["input_ids"] # complete label
-                outputs['input_ids'] = outputs_prompt["input_ids"]
-            else:
-                outputs['labels'] = outputs["input_ids"]
-                
-            return {
-                "input_ids":        outputs["input_ids"],
-                "attention_mask":   outputs["attention_mask"],
-                "labels":           outputs["labels"],
-                **{k: element[k] for k in element.keys() if k not in outputs.keys()}
-            }
-
-        signature_columns = ["input_ids", "labels", "attention_mask"]
-
-        extra_columns = list(set(dataset.column_names) - set(signature_columns))
-
-        if not remove_unused_columns and len(extra_columns) > 0:
-            warnings.warn(
-                "You passed `remove_unused_columns=False` on a non-packed dataset. This might create some issues with the default collator and yield to errors. If you want to "
-                f"inspect dataset other columns (in this case {extra_columns}), you can subclass `DataCollatorForLanguageModeling` in case you used the default collator and create your own data collator in order to inspect the unused dataset columns."
-            )
-        tokenized_dataset = dataset.map(
-            tokenize,
-            batched=True,
-            remove_columns=dataset.column_names if remove_unused_columns else None,
-            num_proc=self.dataset_num_proc,
-            batch_size=self.dataset_batch_size,
-        )
-        return tokenized_dataset
-    
-    @torch.no_grad()
-    def prediction_step(
-        self,
-        model: PreTrainedModel,
-        inputs: Dict[str, Any],
-        prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = None
-    ):
-        model.eval()
-        tokenizer = self.processor.tokenizer
-        
-        # update generation config
-        # eval_max_new_tokens = inputs['struct_length'][0].item()
-        # eval_min_new_tokens = inputs['struct_length'][0].item()
-        eval_config = GenerationConfig(
-            use_cache=True,
-            eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.pad_token_id,
-            do_sample=False,
-            max_new_tokens=8192,
-        )
-
-        logits_processor = UnbatchedModalityLogitsProcessorBase(
-            **self.processor.constant_helper(),
-            processor=self.processor,
-            templates=[
-                ('struct', inputs['struct_length'][0].item()),
-            ]
-        )
-        generated_token_ids: torch.Tensor = model.generate(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            generation_config=eval_config,
-            logits_processor=[logits_processor],
-        ) # type: ignore [B, L] where B = 1 for now
-        target_token_ids = inputs['labels'][0]
-        prompt_length = len(inputs['input_ids'][0])
-                        
-        # decode generated tokens
-        prompt_str = self.processor.tokenizer.decode(inputs['input_ids'][0])
-        generated_str = self.processor.tokenizer.decode(generated_token_ids[0, prompt_length:])
-        target_str = self.processor.tokenizer.decode(target_token_ids[prompt_length:])
-        logger.info(f"=== Prompt ===\n{prompt_str}\n=== Generated ===\n{generated_str}\n=== Target ===\n{target_str}\n")
-        
-        pattern = re.compile(rf"(<struct>(?:{self.processor.tokenizer.struct_regex})+</struct>)")
-        skip_ar = len(pattern.findall(generated_str)) == 0
-        if skip_ar:
-            logger.warning(f"Generated structure string does not match the expected format {pattern}")
-        
-        # metrics include:
-        # - exposure loss
-        # - <vq, nature> tm-score/rmsd-local/rmsd-global
-        # - <ar, nature> tm-score/rmsd-local/rmsd-global
-        metrics = {}
-        
-        pdb_name = inputs['pdb_name'][0]
-        split = inputs['split'][0]
-        root, format = DATASET_RAW_ROOT[split]
-        metrics['split'] = DATASET_SPLIT[split] # due to transformer's param constraint
-        
-        exposure_loss: torch.Tensor = model(
-            input_ids=inputs['labels'],
-            attention_mask=inputs['attention_mask'],
-            labels=inputs['labels'],
-        ).loss
-        metrics['exposure_loss'] = exposure_loss.cpu().item()
-        
-        device = inputs['input_ids'].device
-        p_nature = OpenfoldProtein.from_file(Path(root)/f"{pdb_name}{format}").to(device)
-        p_vq = self.processor.multimodal_decode(target_token_ids, ref=p_nature)['entity'][0].to(device)
-        
-        tm_vq, rmsd_l_vq, rmsd_g_vq = self.processor.compute_tm_align(p_vq, p_nature, ref=p_nature)
-        metrics['tm_vq'] = tm_vq
-        metrics['rmsd_l_vq'] = rmsd_l_vq
-        metrics['rmsd_g_vq'] = rmsd_g_vq
-
-        if not skip_ar:
-            p_ar = self.processor.multimodal_decode(generated_token_ids[0], ref=p_nature)['entity'][0].to(device)
-            tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
-        else:
-            tm_ar, rmsd_l_ar, rmsd_g_ar = 0.0, 20.0, 20.0 # dummy large value
-        metrics['tm_ar'] = tm_ar
-        metrics['rmsd_l_ar'] = rmsd_l_ar
-        metrics['rmsd_g_ar'] = rmsd_g_ar
-        
-        # Summary Here
-        logger.info(f"""Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}]:
-Exposure Loss:  {metrics['exposure_loss']:.4f}
-VQ v.s. Nature: TM-score = {metrics['tm_vq']:.4f}, RMSD_L = {metrics['rmsd_l_vq']:.4f}, RMSD_G = {metrics['rmsd_g_vq']:.4f}
-AR v.s. Nature: TM-score = {metrics['tm_ar']:.4f}, RMSD_L = {metrics['rmsd_l_ar']:.4f}, RMSD_G = {metrics['rmsd_g_ar']:.4f}
-""")
-        model.train()
-        preds = {k:torch.tensor(v).to(device) for k, v in metrics.items()} # metrics to tensor
-        return (exposure_loss, preds, inputs['input_ids'])
-        
-        
-def lf_metrics(eval_pred: EvalPrediction):
-    preds: Dict[str, np.ndarray] = eval_pred.predictions # type: ignore
-    # group average by `dev` field in `preds`
-    # add prefix `overfit`(when `dev`=1) or `test`(when `dev`=2)
-    df = pd.DataFrame({k: v for k, v in preds.items()})
-    metrics = {}
-    for i, group in df.groupby('split'):
-        prefix = list(DATASET_SPLIT.keys())[int(i)] # type: ignore
-        metrics[f'{prefix}/exposure_loss'] = group['exposure_loss'].mean()
-        metrics[f'{prefix}/tm_vq'] = group['tm_vq'].mean()
-        metrics[f'{prefix}/rmsd_l_vq'] = group['rmsd_l_vq'].mean()
-        metrics[f'{prefix}/rmsd_g_vq'] = group['rmsd_g_vq'].mean()
-        metrics[f'{prefix}/tm_ar'] = group['tm_ar'].mean()
-        metrics[f'{prefix}/rmsd_l_ar'] = group['rmsd_l_ar'].mean()
-        metrics[f'{prefix}/rmsd_g_ar'] = group['rmsd_g_ar'].mean()
-    return metrics
-
-
 # Implementation of SFT trainer
 @hydra.main(version_base=None, config_path="./config", config_name="config.yaml")
 def sft(config: DictConfig):
@@ -384,15 +91,42 @@ def sft(config: DictConfig):
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Loaded config ...')
     
-    
+    # prepare dataset
     start_time = time.time()
-    dataset_eval = load_dataset('json', streaming=False, split='train', data_files=config_dataset.fpath_eval)
-    dataset_train = load_dataset('json', streaming=True, split='train', data_files=config_dataset.fpath_train)
-    dataset_train = dataset_train.shuffle(seed=2025)
+    
+    def make_perpetual(ds):
+        def gen():
+            epoch = 0
+            while True:
+                ds.set_epoch(epoch)
+                for ex in ds:
+                    yield ex
+                epoch += 1
+        return IterableDataset.from_generator(gen, features=ds.features)
+    
+    dataset_eval = load_dataset('json', streaming=False, split='train', data_files=config_dataset.eval)
+    features = Features({
+        "split":        Value("string"),
+        "pdb_name":     Value("string"),
+        "plddt":        Value("float32"),
+        "seq_length":   Value("int64"),
+        "struct_length": Value("int64"),
+        "text":         Value("string"),
+    })
+    dataset_train = interleave_datasets(
+        datasets=[
+            make_perpetual(
+                load_dataset('json', streaming=True, split='train', data_files=fpath, features=features).shuffle(seed=2025)
+            )
+            for fpath in config_dataset.train
+        ],    
+        probabilities=config_dataset.weight,
+        seed=2025,
+    )
     elapsed = time.time() - start_time
-    logger.info(f'[{int(elapsed)}s] Loaded dataset ...\n- {config_dataset.fpath_train}\n- {config_dataset.fpath_eval}')
+    logger.info(f'[{int(elapsed)}s] Loaded dataset ...\n- {config_dataset.train}\n- {config_dataset.eval}')
     
-    
+    # prepare qwen3 tokenizer
     start_time = time.time()
     protein_tokenizer = {
         "dist": DistMatrixTokenizer,
@@ -426,26 +160,26 @@ def sft(config: DictConfig):
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Loaded and updated tokenizers ...')
     
-    
+    # prepare qwen3 model
     start_time = time.time()
     qwen3_model = AutoModelForCausalLM.from_pretrained(
         config_lm.model_dir,
         dtype=torch.bfloat16,
         attn_implementation="flash_attention_2"
     )
-    # HINT: `len(tokenizer)` is always right, rather than `vocab_size`
     qwen3_model.resize_token_embeddings(len(qwen2_tokenizer))
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Loaded and updated model ...')
     
     
+    # prepare trainer
+    # HINT: for packing we have to use <|endoftext|> rather than <|im_end|>
     start_time = time.time()
-    # WARN: for packing we have to use <|endoftext|> rather than <|im_end|>
     eod_token, eos_token = qwen2_tokenizer.pad_token, qwen2_tokenizer.eos_token
     qwen2_tokenizer.eos_token = eod_token
     qwen2_tokenizer.eos_token_id = qwen2_tokenizer.pad_token_id
     protein_processor = ProteinProcessor(qwen2_tokenizer, protein_tokenizer)
-    sft_trainer = SFTTrainerWithEval(
+    sft_trainer = PackingFoldingTrainer(
         processor=protein_processor,
         model=qwen3_model,
         tokenizer=qwen2_tokenizer,
@@ -454,7 +188,7 @@ def sft(config: DictConfig):
         eval_dataset=dataset_eval,   # type: ignore
         eval_packing=False,
         eval_collator=ExtraColumnCollator(),
-        compute_metrics=lf_metrics,
+        compute_metrics=PackingFoldingTrainer.compute_metrics,
     )
     sft_trainer.train() # type: ignore
     elapsed = time.time() - start_time

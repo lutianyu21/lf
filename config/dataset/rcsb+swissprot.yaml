@@ -1,10 +1,16 @@
 type: dist
-fpath_train:    
-  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/train/afdb_swissprot.json
+
+train:
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/train/swissprot.json
   - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/train/rcsb.json
-fpath_eval:     
+
+weight:
+  - 0.1
+  - 0.9
+
+eval:
   - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/cameo2022.json
   - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/casp15.json
   - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/casp16.json
-  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/rcsb.json
   - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/dev.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/rcsb.json

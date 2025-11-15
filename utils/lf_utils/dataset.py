@@ -1,3 +1,4 @@
+from tracemalloc import start
 from typing import Any, Dict, Iterator, List
 from pathlib import Path
 import tarfile
@@ -7,6 +8,7 @@ import colorlog
 import pickle
 import os
 import shutil
+from librosa import ex
 import pandas as pd
 import pyarrow
 import pyarrow.parquet
@@ -531,3 +533,75 @@ def step3_merge(
     dst_file = dst_dir / "dataset_merged.parquet"
     pyarrow.parquet.write_table(merged_table, str(dst_file), compression="snappy")
     logger.info(f"Saved merged parquet to {dst_file}")
+    
+    
+    
+    
+
+
+
+
+
+class DataEngine():
+    
+    # TODO many efforts to support larger-scale processing
+    @classmethod
+    def process_icl_data(
+        cls,
+        m8_path:        str | Path,
+        query_path:     str | Path,
+        target_path:    str | Path,
+        output_path:    str | Path,
+    ):
+        # Synthesis based on already tokenized data
+        # Currently pandas is enough
+        import pandas as pd
+        if isinstance(m8_path, str): m8_path = Path(m8_path)
+        if isinstance(query_path, str): query_path = Path(query_path)
+        if isinstance(target_path, str): target_path = Path(target_path)
+        if isinstance(output_path, str): output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # - text: 
+        #   identity={0.2}:<seq>tmpl1</seq><struct>struct1</struct>\n
+        #   identity={0.3}:<seq>tmpl2</seq><struct>struct2</struct>\n
+        #   identity={0.4}:<seq>tmpl3</seq><struct>struct3</struct>\n
+        #   <seq>query</seq> || <struct>struct</struct>
+        icl_rows = []
+        query_df = pd.read_json(query_path, lines=False)
+        target_df = pd.read_json(target_path, lines=False)
+        m8_df = pd.read_csv(m8_path, sep="\t", header=None)
+        for name, group in m8_df.groupby(0):
+            time_start = time.time()
+            query, target_list, identity_list = name, group[1], group[2]
+            context = []
+            
+            try:
+                query_row = query_df[query_df['pdb_name'] == query].iloc[0]
+            except Exception:
+                logger.warning(f"Query {query} not found in tokenized data.")
+                continue
+            
+            for target, identity in zip(target_list, identity_list):
+                # try to locate targets
+                try:
+                    target_row = target_df[target_df['pdb_name'] == target].iloc[0]
+                except Exception:
+                    logger.warning(f"Target {target} not found in tokenized data.")
+                    continue
+                context.append(f'identity={identity}:{target_row["text"]}')
+            
+            # copy query row
+            icl_row = query_row.copy()
+            icl_row['text'] = '\n'.join(context + [query_row["text"]])
+            if 'prompt' in icl_row:
+                icl_row['prompt'] = '\n'.join(context + [query_row["prompt"]])
+                
+            # collect icl_row and save to output
+            icl_rows.append(icl_row)
+            elapsed = time.time() - time_start
+            time_start = time.time()
+            logger.info(f"[{elapsed:.2f}s] Processed ICL for {query} with {len(context)} templates.")
+        icl_df = pd.DataFrame(icl_rows)
+        icl_df.to_json(output_path, lines=False, orient='records', indent=4)
+        logger.info(f"[Done] Saved ICL processed data to {output_path}")

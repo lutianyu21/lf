@@ -70,45 +70,61 @@ restype_3to1 = {v: k for k, v in restype_1to3.items()}
 
 
 class ChainId2ChainName:
-    CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
     BASE = len(CHARS)
 
     def __getitem__(self, idx: int) -> str:
-        # 1-char
-        if idx < self.BASE:
-            return self.CHARS[idx]
-        # 2-char
-        idx -= self.BASE
-        if idx < self.BASE**2:
-            return self.CHARS[idx // self.BASE] + self.CHARS[idx % self.BASE]
-        # 3-char
-        idx -= self.BASE**2
-        if idx < self.BASE**3:
-            i = idx // (self.BASE**2)
-            j = (idx // self.BASE) % self.BASE
-            k = idx % self.BASE
-            return self.CHARS[i] + self.CHARS[j] + self.CHARS[k]
-        else:
-            raise NotImplementedError()
+        if not isinstance(idx, int):
+            raise TypeError(f'Chain id must be an integer, got {type(idx)}.')
+        if idx < 0:
+            raise ValueError(f'Chain id must be non-negative, got {idx}.')
+
+        # Determine the length of the chain name by skipping shorter blocks first.
+        remaining = idx
+        length = 1
+        block = self.BASE
+        while remaining >= block:
+            remaining -= block
+            length += 1
+            block *= self.BASE
+
+        digits: List[int] = []
+        for _ in range(length):
+            digits.append(remaining % self.BASE)
+            remaining //= self.BASE
+        digits.reverse()
+
+        return ''.join(self.CHARS[digit] for digit in digits)
+
 
 class ChainName2ChainId:
-    CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
     BASE = len(CHARS)
-    
+    CHAR_TO_INDEX = {char: idx for idx, char in enumerate(CHARS)}
+
     def __getitem__(self, name: str) -> int:
-        name = name.upper()
-        L = len(name)
-        if L == 0:
+        if not isinstance(name, str):
+            raise TypeError(f'Chain name must be a string, got {type(name)}.')
+        name = name.strip()
+        if name == '':
             return 0
-        elif L == 1:
-            return self.CHARS.index(name)
-        elif L == 2:
-            return self.BASE + self.BASE * self.CHARS.index(name[0]) + self.CHARS.index(name[1])
-        elif L == 3:
-            return self.BASE + self.BASE**2 + self.BASE**2 * self.CHARS.index(name[0]) \
-                   + self.BASE * self.CHARS.index(name[1]) + self.CHARS.index(name[2])
-        else:
-            raise NotImplementedError()
+
+        try:
+            digits = [self.CHAR_TO_INDEX[char] for char in name]
+        except KeyError as exc:
+            raise KeyError(f'Invalid chain name: {name!r}') from exc
+
+        # Offset skips all shorter-name blocks before interpreting the digits as a base-N integer.
+        offset = 0
+        block = self.BASE
+        for _ in range(1, len(digits)):
+            offset += block
+            block *= self.BASE
+
+        value = 0
+        for digit in digits:
+            value = value * self.BASE + digit
+        return offset + value
 
 
 pdb_chain_ids = ChainId2ChainName()
@@ -166,7 +182,7 @@ def _gemmi_parser(
     # one can input: 7dz2.cif, 7dz2_C.cif, AF-<ID>.cif.gz
     # assumption: @ indicates auth_chain_id, % indicates label_chain_id
     p_copy = p
-    stem = p.name.strip('.gz').strip('.cif')
+    stem = p.name.removesuffix('.gz').removesuffix('.cif')
     if '%' in stem:
         subchains_flag = 'label'
         subchains: List[str] | None = stem.split('%')
@@ -349,7 +365,7 @@ class OpenfoldProtein:
     def from_file(cls, path: str | Path, verbose: bool = True):
         if isinstance(path, str): path = Path(path)
         assert path.suffix.lower() in ['.cif', '.mmcif', '.pdb', '.gz'], f'Unsupported file type: {path.suffix}'
-        stem = path.name.strip('.gz').strip('.cif').strip('.pdb')
+        stem = path.name.removesuffix('.gz').removesuffix('.cif').removesuffix('.pdb')
         instance = cls()
         gemmi_out = _gemmi_parser(path, verbose=verbose)
         if gemmi_out == {}:

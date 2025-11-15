@@ -1,0 +1,14 @@
+type: dist
+
+train:    
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/train/swissprot_template.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/train/rcsb_template.json
+
+weight:
+  - 0.1
+  - 0.9
+
+eval:     
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/cameo2022_template.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/casp15_template.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/casp16_template.json

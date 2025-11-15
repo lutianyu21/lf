@@ -23,10 +23,6 @@ ray.init()
 # )
 
 
-
-
-
-
 def pipe_cameo2022():
     step1_pickle(
         dataset_name="cameo",
@@ -48,13 +44,24 @@ def pipe_cameo2022():
     
     
 def pipe_rcsb_monomer():
-    step1_pickle(
-        dataset_name="cameo",
-        src_dir="/GenSIvePFS/users/lutianyu/lf/data/raw/template",
-        dst1_dir="/GenSIvePFS/users/lutianyu/lf/data/pickle/rcsb/chain",
-        clear=False, # for afdb only
-        max_concurrent=3000,
+    # step1_pickle(
+    #     dataset_name="cameo",
+    #     src_dir="/GenSIvePFS/users/lutianyu/lf/data/pickle/rcsb/chain",
+    #     dst1_dir="/GenSIvePFS/users/lutianyu/lf/data/pickle/rcsb/chain",
+    #     clear=False, # for afdb only
+    #     max_concurrent=3000,
+    # )
+    step2_parquet(
+        dataset_name="rcsb_monomer",
+        src_dir="/GenSIvePFS/users/lutianyu/lf/data/pickle/rcsb/chain",
+        dst_dir="/GenSIvePFS/users/lutianyu/lf/data/parquet/rcsb/chain",
+        tokenizer_name='dist',
+        num_cpu_workers=10,
+        num_gpu_workers=2,
+        batch_size=5000,
+        part_size=100000,
     )
+    
     
 
 if __name__ == "__main__":
