@@ -3,7 +3,6 @@ from typing import Any, Callable, Dict, Iterable, List
 import math
 import warnings
 import random
-from matplotlib.pyplot import text
 import numpy as np
 import torch
 import torch.utils
