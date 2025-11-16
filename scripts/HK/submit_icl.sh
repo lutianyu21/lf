@@ -112,7 +112,7 @@ conda run -n qwen3 torchrun \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     --node_rank=$SLURM_NODEID \
-    pipe.py --config-name='folding'
+    pipe.py --config-name='icl'
 
 echo "=== torchrun command executed ==="
 EOF

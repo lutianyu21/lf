@@ -17,6 +17,7 @@ from datasets import Dataset, IterableDataset, load_dataset
 from transformers import (
     PreTrainedModel,
     EvalPrediction,
+    Trainer,
 )
 from transformers.generation.configuration_utils import GenerationConfig
 from trl import SFTTrainer, SFTConfig
@@ -59,7 +60,7 @@ logger.propagate = False
 
 
 class PackingFoldingTrainer(SFTTrainer):
-    
+    # Implementation of packing trainer
     def __init__(
         self,
         processor: ProteinProcessor,
@@ -262,7 +263,7 @@ class PackingFoldingTrainer(SFTTrainer):
             eos_token_id=tokenizer.eos_token_id,
             pad_token_id=tokenizer.pad_token_id,
             do_sample=False,
-            max_new_tokens=8*1024,
+            max_new_tokens=12*1024,
         )
         logits_processor = UnbatchedModalityLogitsProcessorBase(
             **self.processor.constant_helper(),
@@ -278,8 +279,8 @@ class PackingFoldingTrainer(SFTTrainer):
         generation_token_ids = generation_token_ids[:, :-1] # remove the last eos token
         generation_acc = (generation_token_ids[0, prompt_length:] == inputs['labels'][0, prompt_length:]).float().mean().item()
         p_nature = OpenfoldProtein.from_file(Path(root)/f"{pdb_name}{format}").to(device)
-        p_vq = self.processor.multimodal_decode(inputs['labels'][0], ref=p_nature)['entity'][0].to(device)
-        p_ar = self.processor.multimodal_decode(generation_token_ids[0], ref=p_nature)['entity'][0].to(device)
+        p_vq = self.processor.multimodal_decode(inputs['labels'][0, prompt_length:], ref=p_nature)['entity'][0].to(device)
+        p_ar = self.processor.multimodal_decode(generation_token_ids[0, prompt_length:], ref=p_nature)['entity'][0].to(device)
         tm_vq, rmsd_l_vq, rmsd_g_vq = self.processor.compute_tm_align(p_vq, p_nature, ref=p_nature)
         tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
         
@@ -340,3 +341,61 @@ AR v.s. Nature: TM-score = {metrics['tm_ar']:.4f}, RMSD_L = {metrics['rmsd_l_ar'
                 'loss_eps':     group['loss_eps'].mean(),
             }
         return metrics
+
+
+# class LengthBatchingFoldingTrainer(Trainer):
+#     # Implementation of batching trainer
+    
+#     def __init__(
+#         self,
+#         processor: ProteinProcessor,
+#         train_collator: ExtraColumnCollator,
+#         eval_collator: ExtraColumnCollator,
+#         *args,
+#         **kwargs
+#     ):
+#         super().__init__(*args, **kwargs)
+#         self.processor = processor
+#         self.eval_collator = eval_collator
+        
+#     def get_train_dataloader(self):
+#         return SortishApproxBatchDataloader(
+#             ds=self.train_dataset,
+#             collater=self.train_collator,
+#             bucket_size=1000,
+#             max_batch_size=256,
+#             max_tokens=256000,
+#             max_square_tokens=256000000,
+#             max_len=2048,
+#         )
+    
+#     def get_eval_dataloader(self, eval_dataset: Any = None) -> torch.utils.data.DataLoader:
+#         if eval_dataset is None and self.eval_dataset is None:
+#             raise ValueError("Trainer: evaluation requires an eval_dataset.")
+
+#         # If we have persistent workers, don't do a fork bomb especially as eval datasets
+#         # don't change during training
+#         if hasattr(self, "_eval_dataloader") and self.args.dataloader_persistent_workers:
+#             return self.accelerator.prepare(self._eval_dataloader)
+#         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
+#         data_collator = self.eval_collator
+#         dataloader_params = {
+#             "batch_size": self.args.eval_batch_size,
+#             "collate_fn": data_collator,
+#             "num_workers": self.args.dataloader_num_workers,
+#             "pin_memory": self.args.dataloader_pin_memory,
+#             "persistent_workers": self.args.dataloader_persistent_workers,
+#         }
+
+#         if not isinstance(eval_dataset, torch.utils.data.IterableDataset):
+#             dataloader_params["sampler"] = self._get_eval_sampler(eval_dataset)
+#             dataloader_params["drop_last"] = self.args.dataloader_drop_last
+#             dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+
+#         # accelerator.free_memory() will destroy the references, so
+#         # we need to store the non-prepared version
+#         eval_dataloader = torch.utils.data.DataLoader(eval_dataset, **dataloader_params)
+#         if self.args.dataloader_persistent_workers:
+#             self._eval_dataloader = eval_dataloader
+#         return self.accelerator.prepare(eval_dataloader)
+    

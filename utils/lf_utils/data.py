@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, Iterable, List
 import math
 import warnings
 import random
+from matplotlib.pyplot import text
 import numpy as np
 import torch
 import torch.utils
@@ -15,8 +16,7 @@ from .constant import DATASET_SPLIT
 from .protein_processor import ProteinProcessor
 
 __all__ = [
-    'ExtraColumnCollator',
-    'ItemwiseConstantLengthDataset',
+    'ExtraColumnCollator', 'ItemwiseConstantLengthDataset',
 ]
 
 
@@ -106,19 +106,6 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                     "input_ids": torch.LongTensor(example),
                     "labels": torch.LongTensor(example),
                 }
-                    
-            
-            
-
-
-
-
-
-
-    
-
-
-
 
 class TextCollator:
     # handle pure-text dataset
@@ -127,42 +114,39 @@ class TextCollator:
         self.eval_mode = eval_mode
     
     def __call__(self, batch: List[Dict[str, Any]]) -> Any:
+        # extra feature
+        feature = dict()
+        for k in batch[0].keys():
+            if not k in ['input_ids', 'attention_mask', 'labels', 'prompt']:
+                feature[k] = list(map(lambda x: x[k], batch))
         
-        train_feature: Dict[str, torch.Tensor] = self.processor.tokenizer(
+        # main feature
+        text_feature: Dict[str, torch.Tensor] = self.processor.tokenizer(
             list(map(lambda x: x["text"], batch)),
             return_tensors='pt',
             padding=True
         ) # type: ignore
+        input_ids = text_feature['input_ids']
+        attention_mask = text_feature['attention_mask']
+        labels = text_feature['input_ids'].clone()
+        labels = torch.where(attention_mask, labels, -100)
         
-        eval_feature: Dict[str, torch.Tensor] = self.processor.tokenizer(
-            list(map(lambda x: x["prompt"], batch)),
-            return_tensors='pt',
-            padding=True
-        ) # type: ignore
-        
-        labels = train_feature['input_ids'].clone()
-        labels = torch.where(train_feature['attention_mask'].bool(), labels, -100)
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
-        seq_length = torch.tensor(list(map(lambda x: x["seq_length"], batch)))
-        struct_length = torch.tensor(list(map(lambda x: x["struct_length"], batch)))
-        total_length = torch.tensor(list(map(lambda x: x["total_length"], batch)))
-        pdb_name = list(map(lambda x: x["pdb_name"], batch))
-        split = list(map(lambda x: x["split"], batch))
-        dev = torch.tensor(list(map(lambda x: x["dev"], batch)))
-    
-        return dict(
+        prompt_feature = None
+        if self.eval_mode:
+            prompt_feature = self.processor.tokenizer(
+                list(map(lambda x: x["prompt"], batch)),
+                return_tensors='pt',
+                padding=True
+            ) # type: ignore
+            # overite input_ids and attention_mask
+            input_ids = prompt_feature['input_ids']
+            attention_mask = prompt_feature['attention_mask']
+            
+        return feature.update(dict(
             labels=labels,
-            input_ids=train_feature['input_ids'],
-            attention_mask=train_feature['attention_mask'], # exposure
-            eval_input_ids=eval_feature['input_ids'],
-            eval_attention_mask=eval_feature['attention_mask'],
-            total_length=total_length,
-            seq_length=seq_length,
-            struct_length=struct_length,
-            pdb_name=pdb_name,
-            split=split,
-            dev=dev
-        )
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        ))
 
 class SortishSampler(torch.utils.data.Sampler):
     def __init__(
@@ -314,7 +298,8 @@ class SortishApproxBatchDataloader(torch.utils.data.DataLoader):
         world_size: int = 1,
         max_len: int = 512,
     ) -> None:
-        lens = list(ds['total_length'])
+        # count special tokens
+        lens = [x + y + 2 + 2 for x, y in zip(ds['seq_length'], ds['struct_length'])]
         train_sortish_sampler = SortishSampler(
             lens,
             bucket_size,
@@ -336,6 +321,5 @@ class SortishApproxBatchDataloader(torch.utils.data.DataLoader):
             num_workers=num_workers,
             collate_fn=collater,
         )
-        
     def set_epoch(self, epoch):
         self.apporx_batch_sampler.set_epoch(epoch)
