@@ -13,10 +13,10 @@ weight_decay: 0.01
 max_grad_norm: 1.0
 max_steps: 50000
 warmup_steps: 5000
-learning_rate: 1e-3
+learning_rate: 1e-4
 lr_scheduler_type: polynomial
 lr_scheduler_kwargs:
-  lr_end: 1e-4
+  lr_end: 1e-5
   power: 1.0
 
 # training
@@ -32,4 +32,4 @@ dataset_text_field: text
 # evaluation
 per_device_eval_batch_size: 1
 eval_strategy: steps
-eval_steps: 1000
+eval_steps: 500

@@ -19,6 +19,7 @@ from transformers import (
     EvalPrediction,
     Trainer,
 )
+import sacrebleu
 from transformers.generation.configuration_utils import GenerationConfig
 from trl import SFTTrainer, SFTConfig
 from trl.trainer.utils import ConstantLengthDataset
@@ -234,7 +235,7 @@ class PackingFoldingTrainer(SFTTrainer):
         ignore_keys: Optional[List[str]] = None
     ):
         # CORE: we want to find the correlation among following metrics:
-        # exposure-loss ～ exposure-acc ～ genertaion-acc ～ tm-score
+        # exposure-loss ～ exposure-acc ～ generation-acc ～ tm-score
         # for [cameo2022, casp15, casp16, eval, overfit] respectively
         model.eval()
         
@@ -276,11 +277,17 @@ class PackingFoldingTrainer(SFTTrainer):
             generation_config=generation_config,
             logits_processor=[logits_processor],
         ) # type: ignore
-        generation_token_ids = generation_token_ids[:, :-1] # remove the last eos token
-        generation_acc = (generation_token_ids[0, prompt_length:] == inputs['labels'][0, prompt_length:]).float().mean().item()
+        
+        generation_token_ids = generation_token_ids[0, prompt_length:-1] # remove the last eos token
+        target_token_ids = inputs['labels'][0, prompt_length:]
+        generation_acc = (generation_token_ids == target_token_ids).float().mean().item()
+        generation_bleu = sacrebleu.corpus_bleu(
+            [" ".join(map(str, generation_token_ids.cpu().tolist()))],
+            [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
+        ).score
         p_nature = OpenfoldProtein.from_file(Path(root)/f"{pdb_name}{format}").to(device)
-        p_vq = self.processor.multimodal_decode(inputs['labels'][0, prompt_length:], ref=p_nature)['entity'][0].to(device)
-        p_ar = self.processor.multimodal_decode(generation_token_ids[0, prompt_length:], ref=p_nature)['entity'][0].to(device)
+        p_vq = self.processor.multimodal_decode(target_token_ids, ref=p_nature)['entity'][0].to(device)
+        p_ar = self.processor.multimodal_decode(generation_token_ids, ref=p_nature)['entity'][0].to(device)
         tm_vq, rmsd_l_vq, rmsd_g_vq = self.processor.compute_tm_align(p_vq, p_nature, ref=p_nature)
         tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
         
@@ -288,17 +295,27 @@ class PackingFoldingTrainer(SFTTrainer):
         exposure = model(
             input_ids=inputs['labels'],
             attention_mask=inputs['attention_mask'],
-            labels=inputs['labels']
         ) # <seq>...</seq><struct>...</struct>
-        exposure_loss = exposure.loss
-        exposure_token_ids = exposure.logits.argmax(dim=-1)
-        exposure_acc = (exposure_token_ids == inputs['labels']).float().mean().item()
-        
+        # (manual computation for <struct>...</struct> part)
+        exposure_logits: torch.Tensor = exposure.logits[0, prompt_length:, :] # type: ignore
+        exposure_token_ids = exposure_logits.argmax(dim=-1)
+        exposure_bleu = sacrebleu.corpus_bleu(
+            [" ".join(map(str, exposure_token_ids.cpu().tolist()))],
+            [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
+        ).score
+        exposure_loss = torch.nn.functional.nll_loss(
+            input=torch.log_softmax(exposure_logits, dim=-1)[:-1],
+            target=target_token_ids[1:],
+            reduction='mean'
+        )
+        exposure_acc = (exposure_token_ids == target_token_ids).float().mean().item()
+            
         metrics = dict(
             # meta
             split=DATASET_SPLIT[split],
             # generation pipeline
             acc_gen=generation_acc,
+            bleu_gen=generation_bleu,
             tm_vq=tm_vq,
             rmsd_l_vq=rmsd_l_vq,
             rmsd_g_vq=rmsd_g_vq,
@@ -307,14 +324,16 @@ class PackingFoldingTrainer(SFTTrainer):
             rmsd_g_ar=rmsd_g_ar,
             # exposure pipeline
             acc_eps=exposure_acc,
+            bleu_eps=exposure_bleu,
             loss_eps=exposure_loss,
         )
         
         # format a logging message here
         logger.info(f"""Evaluated [{pdb_name}] from [{split}]:
-Exposure Loss: {metrics['loss_eps']:.4f}
-Exposure Acc: {metrics['acc_eps']:.4f}
-Generation Acc: {metrics['acc_gen']:.4f}
+Exposure Results:   {self.processor.tokenizer.decode(exposure_token_ids.cpu().tolist())}
+Generation Results: {self.processor.tokenizer.decode(generation_token_ids.cpu().tolist())}
+Exposure Acc:   {metrics['acc_eps']:.4f}, BLEU: {metrics['bleu_eps']:.4f}
+Generation Acc: {metrics['acc_gen']:.4f}, BLEU: {metrics['bleu_gen']:.4f}
 VQ v.s. Nature: TM-score = {metrics['tm_vq']:.4f}, RMSD_L = {metrics['rmsd_l_vq']:.4f}, RMSD_G = {metrics['rmsd_g_vq']:.4f}
 AR v.s. Nature: TM-score = {metrics['tm_ar']:.4f}, RMSD_L = {metrics['rmsd_l_ar']:.4f}, RMSD_G = {metrics['rmsd_g_ar']:.4f}
 """)    
@@ -341,6 +360,8 @@ AR v.s. Nature: TM-score = {metrics['tm_ar']:.4f}, RMSD_L = {metrics['rmsd_l_ar'
                 'loss_eps':     group['loss_eps'].mean(),
             }
         return metrics
+
+
 
 
 # class LengthBatchingFoldingTrainer(Trainer):

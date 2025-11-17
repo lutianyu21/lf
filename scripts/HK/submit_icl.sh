@@ -76,6 +76,11 @@ $PIP install trl==0.9.6 \
     --trusted-host pypi.python.org \
     --trusted-host files.pythonhosted.org
 
+$PIP install sacrebleu \
+    --trusted-host pypi.org \
+    --trusted-host pypi.python.org \
+    --trusted-host files.pythonhosted.org
+
 for pkg in colorlog ray einx; do
     if python -c "import $pkg" &>/dev/null; then
         echo "✅ $pkg already installed, skip."
