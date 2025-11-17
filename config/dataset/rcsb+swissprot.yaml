@@ -9,8 +9,8 @@ weight:
   - 0.9
 
 eval:
-  # - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/cameo2022.json
-  # - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/casp15.json
-  # - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/casp16.json
-  # - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/dev.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/cameo2022.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/casp15.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/casp16.json
+  - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/dev.json
   - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/rcsb.json
