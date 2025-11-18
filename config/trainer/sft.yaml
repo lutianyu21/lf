@@ -1,7 +1,8 @@
 # logger
 logging_strategy: steps
 logging_steps: 1
-save_strategy: epoch
+save_strategy: steps
+save_steps: 1000
 save_total_limit: 1
 report_to: wandb
 output_dir: dummy
@@ -13,7 +14,7 @@ weight_decay: 0.01
 max_grad_norm: 1.0
 max_steps: 50000
 warmup_steps: 5000
-learning_rate: 1e-4
+learning_rate: 5e-4
 lr_scheduler_type: polynomial
 lr_scheduler_kwargs:
   lr_end: 1e-5

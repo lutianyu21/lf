@@ -164,7 +164,6 @@ class PackingFoldingTrainer(SFTTrainer):
         add_special_tokens=True,
         remove_unused_columns=False,
     ):
-        
         use_formatting_func = formatting_func is not None and dataset_text_field is None
         self._dataset_sanity_checked = False
 
@@ -198,8 +197,8 @@ class PackingFoldingTrainer(SFTTrainer):
                     return_overflowing_tokens=False,
                     return_length=False,
                 )
-                outputs['labels'] = outputs["input_ids"] # complete label
-                outputs['input_ids'] = outputs_prompt["input_ids"]
+                outputs['labels'] = outputs["input_ids"]
+                outputs['input_ids'] = outputs_prompt["input_ids"] # truncated input_ids
             else:
                 outputs['labels'] = outputs["input_ids"]
                 
@@ -225,6 +224,16 @@ class PackingFoldingTrainer(SFTTrainer):
             batch_size=self.dataset_batch_size,
         )
         return tokenized_dataset
+    
+    def compute_loss(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        return_outputs: bool = False,
+        num_items_in_batch: Optional[torch.Tensor] = None,
+    ):
+        # logger.warning(self.processor.tokenizer.decode(inputs['labels'][0].cpu().tolist()))
+        return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
     
     @torch.no_grad()
     def prediction_step(
@@ -278,8 +287,8 @@ class PackingFoldingTrainer(SFTTrainer):
             logits_processor=[logits_processor],
         ) # type: ignore
         
-        generation_token_ids = generation_token_ids[0, prompt_length:-1] # remove the last eos token
-        target_token_ids = inputs['labels'][0, prompt_length:]
+        target_token_ids = inputs['labels'][0, prompt_length :]             # <struct>....</struct>
+        generation_token_ids = generation_token_ids[0, prompt_length : -1]  # <struct>....</struct>
         generation_acc = (generation_token_ids == target_token_ids).float().mean().item()
         generation_bleu = sacrebleu.corpus_bleu(
             [" ".join(map(str, generation_token_ids.cpu().tolist()))],
@@ -293,19 +302,18 @@ class PackingFoldingTrainer(SFTTrainer):
         
         # exposure pipeline
         exposure = model(
-            input_ids=inputs['labels'],
-            attention_mask=inputs['attention_mask'],
-        ) # <seq>...</seq><struct>...</struct>
-        # (manual computation for <struct>...</struct> part)
-        exposure_logits: torch.Tensor = exposure.logits[0, prompt_length:, :] # type: ignore
-        exposure_token_ids = exposure_logits.argmax(dim=-1)
+            input_ids=inputs['labels'],                     # <seq>....</seq><struct>....</struct>
+            attention_mask=inputs['attention_mask'],       
+        )                                                   # ....</seq><struct>....</struct><endoftext>
+        exposure_logits: torch.Tensor = exposure.logits[0, prompt_length - 1 : -1, :] # type: ignore
+        exposure_token_ids = exposure_logits.argmax(dim=-1)                 # <struct>....</struct>
         exposure_bleu = sacrebleu.corpus_bleu(
             [" ".join(map(str, exposure_token_ids.cpu().tolist()))],
             [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
         ).score
         exposure_loss = torch.nn.functional.nll_loss(
-            input=torch.log_softmax(exposure_logits, dim=-1)[:-1],
-            target=target_token_ids[1:],
+            input=torch.log_softmax(exposure_logits, dim=-1),
+            target=target_token_ids,
             reduction='mean'
         )
         exposure_acc = (exposure_token_ids == target_token_ids).float().mean().item()
@@ -330,8 +338,10 @@ class PackingFoldingTrainer(SFTTrainer):
         
         # format a logging message here
         logger.info(f"""Evaluated [{pdb_name}] from [{split}]:
+Target Results:     {self.processor.tokenizer.decode(target_token_ids.cpu().tolist())}
 Exposure Results:   {self.processor.tokenizer.decode(exposure_token_ids.cpu().tolist())}
 Generation Results: {self.processor.tokenizer.decode(generation_token_ids.cpu().tolist())}
+Exposure Loss:  {metrics['loss_eps']:.4f}
 Exposure Acc:   {metrics['acc_eps']:.4f}, BLEU: {metrics['bleu_eps']:.4f}
 Generation Acc: {metrics['acc_gen']:.4f}, BLEU: {metrics['bleu_gen']:.4f}
 VQ v.s. Nature: TM-score = {metrics['tm_vq']:.4f}, RMSD_L = {metrics['rmsd_l_vq']:.4f}, RMSD_G = {metrics['rmsd_g_vq']:.4f}
@@ -350,6 +360,7 @@ AR v.s. Nature: TM-score = {metrics['tm_ar']:.4f}, RMSD_L = {metrics['rmsd_l_ar'
             metrics[prefix] = {
                 'count':        len(group),
                 'acc_gen':      group['acc_gen'].mean(),
+                'bleu_gen':     group['bleu_gen'].mean(),
                 'tm_vq':        group['tm_vq'].mean(),
                 'rmsd_l_vq':    group['rmsd_l_vq'].mean(),
                 'rmsd_g_vq':    group['rmsd_g_vq'].mean(),
@@ -357,6 +368,7 @@ AR v.s. Nature: TM-score = {metrics['tm_ar']:.4f}, RMSD_L = {metrics['rmsd_l_ar'
                 'rmsd_l_ar':    group['rmsd_l_ar'].mean(),
                 'rmsd_g_ar':    group['rmsd_g_ar'].mean(),
                 'acc_eps':      group['acc_eps'].mean(),
+                'bleu_eps':     group['bleu_eps'].mean(),
                 'loss_eps':     group['loss_eps'].mean(),
             }
         return metrics
