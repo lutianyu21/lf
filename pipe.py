@@ -132,7 +132,7 @@ def sft(config: DictConfig):
         "dplm": DPLMProteinTokenizer,
     }[str(config_dataset.type)].get_instance()
     qwen2_tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained(config_lm.model_dir)
-    qwen2_tokenizer.padding_side = "left"
+    qwen2_tokenizer.padding_side = "right"
     qwen2_tokenizer.truncation_side = "right"
     qwen2_tokenizer.boseq_token = '<seq>'
     qwen2_tokenizer.eoseq_token = '</seq>'

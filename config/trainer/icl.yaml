@@ -3,7 +3,7 @@ logging_strategy: steps
 logging_steps: 1
 save_strategy: steps
 save_steps: 1000
-save_total_limit: 1
+save_total_limit: 10
 report_to: wandb
 output_dir: dummy
 overwrite_output_dir: True

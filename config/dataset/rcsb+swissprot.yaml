@@ -5,8 +5,8 @@ train:
   - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/train/rcsb.json
 
 weight:
-  - 0.1
   - 0.9
+  - 0.1
 
 eval:
   - /GenSIvePFS/users/lutianyu/lf/dataset/rcsb+swissprot/eval/cameo2022.json

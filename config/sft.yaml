@@ -4,7 +4,7 @@ defaults:
   - lm: qwen3
   - trainer: sft
 
-name: qwen3@rcsb+swissprot@folding
+name: qwen3@rcsb+swissprot@debug_folding
 
 hydra:
   output_subdir: null
