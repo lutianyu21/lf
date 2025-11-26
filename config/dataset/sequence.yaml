@@ -1,0 +1,10 @@
+type: dist
+
+train:
+  - /GenSIvePFS/users/lutianyu/lf/dataset/sequence/uniref_dplm/train/*.parquet
+
+weight:
+  - 1.0
+
+eval:
+  - /GenSIvePFS/users/lutianyu/lf/dataset/folding/rcsb+swissprot_dplm/eval/*.parquet
