@@ -542,6 +542,23 @@ def step3_merge(
 
 class DataEngine():
     
+    
+    @classmethod
+    def pickle(
+        cls,
+        dataset_name:  str,
+    ):
+        pass
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     # TODO many efforts to support larger-scale processing
     @classmethod
     def process_icl_data(

@@ -50,7 +50,19 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                 if buffer_len >= self.max_buffer_size:
                     break
                 try:
-                    buffer.append(self.formatting_func(next(iterator)))
+                    tmp = next(iterator)
+                    # TODO apply cropping here if sequence is too long
+                    # following dplm https://arxiv.org/pdf/2402.18567 a 1024 segment is cropped from the original sequence
+                    if tmp['seq_length'] > self.seq_length and tmp['struct_length'] == 0:
+                        pool = tmp['text'].split(' ')
+                        boseq, eoseq = pool[0], pool[-1]
+                        start_idx = random.randint(1, len(pool) - 1024 - 1)
+                        end_idx = start_idx + 1024
+                        tmp['text'] = ' '.join([boseq] + pool[start_idx:end_idx]) + eoseq
+                        tmp['seq_length'] = 1024
+                        warnings.warn(f"Sequence {tmp['pdb_name']} is too long, cropped to length 1024.")
+                    
+                    buffer.append(self.formatting_func(tmp))
                     buffer_len += len(buffer[-1])
                 except StopIteration:
                     if self.infinite:

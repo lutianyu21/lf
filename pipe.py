@@ -103,7 +103,7 @@ def sft(config: DictConfig):
                 epoch += 1
         return IterableDataset.from_generator(gen, features=ds.features)
     
-    dataset_eval = load_dataset('json', streaming=False, split='train', data_files=config_dataset.eval)
+    dataset_eval = load_dataset('parquet', streaming=False, split='train', data_files=config_dataset.eval)
     features = Features({
         "split":        Value("string"),
         "pdb_name":     Value("string"),
@@ -115,7 +115,7 @@ def sft(config: DictConfig):
     dataset_train = interleave_datasets(
         datasets=[
             make_perpetual(
-                load_dataset('json', streaming=True, split='train', data_files=fpath, features=features).shuffle(seed=2025)
+                load_dataset('parquet', streaming=True, split='train', data_files=fpath, features=features).shuffle(seed=2025)
             )
             for fpath in config_dataset.train
         ],    

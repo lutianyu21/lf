@@ -236,9 +236,10 @@ class PackingFoldingTrainer(SFTTrainer):
     ):
         # logger.warning(self.processor.tokenizer.decode(inputs['labels'][0].cpu().tolist()))
         return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
-
+    
+    
     @torch.no_grad()
-    def _prediction_step_llm(
+    def _prediction_step_mllm(
         self,
         model: PreTrainedModel,
         inputs: Dict[str, Any],
@@ -362,6 +363,16 @@ Structure Generation Acc/Bleu:  {metrics['struct_acc_gen']:.4f}/{metrics['struct
         model.train()
         return (exposure.loss, {k:torch.tensor(v).to(device) for k, v in metrics.items()}, inputs['input_ids'])
     
+    @torch.no_grad()
+    def prediction_step(
+        self,
+        model: PreTrainedModel,
+        inputs: Dict[str, Any],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None
+    ):
+        return self._prediction_step_mllm(model, inputs, prediction_loss_only, ignore_keys)
+    
     @classmethod
     def compute_metrics(cls, eval_pred: EvalPrediction):
         preds: Dict[str, np.ndarray] = eval_pred.predictions # type: ignore
@@ -383,15 +394,6 @@ Structure Generation Acc/Bleu:  {metrics['struct_acc_gen']:.4f}/{metrics['struct
             }
         return metrics
     
-    @torch.no_grad()
-    def prediction_step(
-        self,
-        model: PreTrainedModel,
-        inputs: Dict[str, Any],
-        prediction_loss_only: bool,
-        ignore_keys: Optional[List[str]] = None
-    ):
-        return self._prediction_step_llm(model, inputs, prediction_loss_only, ignore_keys)
         
         
         
