@@ -75,7 +75,7 @@ class DataEngine:
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_03"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_04"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest"),
-            Path("/GenSIvePFS/users/lutianyu/lutianyu/data/AFDB/part_06"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_06"),
         ]:
             for tar_path in split_dir.glob("proteome-tax_id-*_v4.tar"):
                 try:
