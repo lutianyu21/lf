@@ -105,7 +105,7 @@ class DataEngine:
             for line in f:
                 for item in line.strip().split():
                     if not item.startswith('AF'):
-                        logger.warning(f"Ignore query item: {item}")
+                        continue
                     else:
                         # FIX here: uniref-style AF_AFA0A075B5T2F1_1; HK-style AF-AFA0A075B5T2F1-F1-model_v4
                         item_fixed = f"AF-{item.split('_')[1]}-F1-model_v4"
