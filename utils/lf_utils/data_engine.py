@@ -107,8 +107,8 @@ class DataEngine:
                     if not item.startswith('AF'):
                         continue
                     else:
-                        # FIX here: uniref-style AF_AFA0A075B5T2F1_1; HK-style AF-AFA0A075B5T2F1-F1-model_v4
-                        item_fixed = f"AF-{item.split('_')[1]}-F1-model_v4"
+                        # FIX here: uniref-style AF_AFA0A075B5T2F1_1; HK-style AF-A0A075B5T2-F1-model_v4
+                        item_fixed = f"AF-{item.split('_')[1][2:-2]}-F1-model_v4"
                         query_set.add(item_fixed)
         
         # submit cpu jobs
