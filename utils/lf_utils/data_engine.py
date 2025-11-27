@@ -69,13 +69,13 @@ class DataEngine:
         # scanning will return 
         # - tmp_root/AF-A0A2H0UIM4-F1-model_v4.cif.gz
         for split_dir in [
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_00"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_01"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_02"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_03"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_04"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_05_dest"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_06"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_00"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_01"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_02"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_03"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_04"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest"),
+            Path("/GenSIvePFS/users/lutianyu/lutianyu/data/AFDB/part_06"),
         ]:
             for tar_path in split_dir.glob("proteome-tax_id-*_v4.tar"):
                 try:
