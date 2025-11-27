@@ -19,6 +19,7 @@
 *.pdb
 *.m8
 *.json
+*.tar
 
 # slink
 **/rcsb

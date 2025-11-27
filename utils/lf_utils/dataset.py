@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, Iterator, List, Tuple
 from pathlib import Path
 import tarfile
 import tempfile
@@ -560,131 +560,25 @@ def process_file(input_path: Path, output_dir: Path, clear: bool):
 
 
 
-@ray.remote
-def copy_file(input_path: Path, output_dir: Path):
-    # maintain the original file name
-    try:
-        output_path = output_dir / input_path.name
-        if output_path.exists():
-            return ("skipped", str(output_path))
-        else:     
-            shutil.copy2(input_path, output_path)
-            return ("success", str(output_path))
-    except Exception as e:
-        return ("failed", str(input_path), str(e))
 
 
-class DataEngine():
-    
-    # scan AFDB / SwissProt / RCSB / CASP / CAMEO dataset and yield file paths
-    # updated api:
-    @classmethod
-    def _scan_hk_afdb(cls) -> Iterator[Path]:
-        tmp_root = Path(tempfile.gettempdir()) / f"pid_{os.getpid()}"
-        tmp_root.mkdir(parents=True, exist_ok=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         
-        # e.g. for proteome-tax_id-1974607-0_v4.tar, we have
-        # - AF-A0A2H0UIM4-F1-model_v4.cif.gz
-        # - AF-A0A2H0UIM4-F1-confidence_v4.json.gz
-        # - AF-A0A2H0UIM4-F1-predicted_aligned_error_v4.json.gz
-        # scanning will return 
-        # - tmp_root/AF-A0A2H0UIM4-F1-model_v4.cif.gz
-        for split_dir in [
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_00"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_01"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_02"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_03"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_04"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_05_dest"),
-            Path("/home/projects/protein/lutianyu/data/AFDB/part_06"),
-        ]:
-            for tar_path in split_dir.glob("proteome-tax_id-*_v4.tar"):
-                try:
-                    with tarfile.open(tar_path, "r") as tf:
-                        for member in tf:
-                            if member.name.endswith("-F1-model_v4.cif.gz"):
-                                f = tf.extractfile(member)
-                                if f is None: continue
-                                tmp_path = tmp_root / Path(member.name).name
-                                with open(tmp_path, "wb") as out_f:
-                                    shutil.copyfileobj(f, out_f)
-                                yield tmp_path
-                except Exception as e:
-                    logger.error(f"Failed to extract {tar_path}: {e}")
-    
-    def _query_hk_afdb(
-        self,
-        query_path: Path,
-        output_dir: Path,
-        max_concurrent: int,
-    ):
-        if not query_path.name.endswith('.txt'): raise NotImplementedError()
-        output_dir.mkdir(parents=True, exist_ok=True)
         
-        # load query set: AF_AFQ8UGE8F1_1 AF_AFQ8ZB83F1_1 ...
-        query_set = set()
-        with open(query_path, 'r') as f:
-            for line in f:
-                for item in line.strip().split():
-                    if not item.startswith('AF'):
-                        logger.warning(f"Ignore query item: {item}")
-                    else:
-                        # FIX here: uniref-style AF_AFA0A075B5T2F1_1; HK-style AF-AFA0A075B5T2F1-F1-model_v4.cif.gz
-                        item_fixed = item.replace('_', '-').replace('_1', '-F1-model_v4.cif.gz')
-                        query_set.add(item_fixed)
-
-        total_count = 0
-        failures,futures = [], []
-        for i, p in enumerate(self._scan_hk_afdb()):
-            if p.name not in query_set:
-                logger.warning(f"Skipping {p.name} as it is not in the query set.")
-                continue
-            else:
-                logger.info(f"Collecting {p.name} as it is in the query set.")
-                
-            # if match, submit a copy/parsing task
-            futures.append(copy_file.remote(p, output_dir))
-            total_count += 1
-            
-            if len(futures) >= max_concurrent:
-                done, futures = ray.wait(futures, num_returns=max_concurrent)
-                done_results = ray.get(done)
-                for res in done_results:
-                    status = res[0]
-                    if status == "success":
-                        logger.info(f"[uid={total_count}] Processed: {res[1]}")
-                    elif status == "skipped":
-                        logger.warning(f"[uid={total_count}] Skipped (exists): {res[1]}")
-                    elif status == "failed":
-                        logger.error(f"[uid={total_count}] Failed: {res[1]} Error: {res[2]}")
-                        failures.append(res[1])
-
-        # collecting remaining futures
-        while futures:
-            done, futures = ray.wait(futures, num_returns=min(max_concurrent, len(futures)))
-            done_results = ray.get(done)
-            for res in done_results:
-                status = res[0]
-                if status == "success":
-                    logger.info(f"[uid={total_count}] Processed: {res[1]}")
-                elif status == "skipped":
-                    logger.warning(f"[uid={total_count}] Skipped (exists): {res[1]}")
-                elif status == "failed":
-                    logger.error(f"[uid={total_count}] Failed: {res[1]} Error: {res[2]}")
-                    failures.append(res[1])
-                    
-        failures_file = output_dir / "failures.txt"
-        if failures_file.exists(): failures_file.unlink()
-        if failures:
-            with open(failures_file, "w") as f:
-                for item in failures:
-                    f.write(f"{item}\n")
-            logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
-        logger.info(f"All tasks completed. Total submitted: {total_count}")
-
-            
-   
-
             
 
         

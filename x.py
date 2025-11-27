@@ -1,11 +1,11 @@
-import duckdb
-data_dir = "/GenSIvePFS/users/lutianyu/lf/dataset/sequence/uniref_dplm/train/*.parquet"
-output = "/GenSIvePFS/users/lutianyu/lf/dataset/sequence/uniref_dplm/uniref50_dplm_train_full.parquet"
+import ray
+ray.init(ignore_reinit_error=True)
 
-duckdb.sql(f"""
-    COPY (
-        SELECT * 
-        FROM read_parquet('{data_dir}')
-        USING SAMPLE 100%  -- 全局 shuffle
-    ) TO '{output}' (FORMAT PARQUET);
-""")
+from utils.lf_utils.data_engine import DataEngine
+from pathlib import Path
+
+DataEngine()._query_hk_afdb(
+    query_path=Path("/GenSIvePFS/users/lutianyu/lf/clusters-by-entity-40.txt"),
+    output_dir=Path("/GenSIvePFS/users/lutianyu/lf/afdb"),
+    max_concurrent=3000,
+)
