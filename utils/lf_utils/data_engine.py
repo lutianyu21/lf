@@ -124,10 +124,10 @@ class DataEngine:
                 raise NotImplementedError()
             
             if p_name not in query_set:
-                logger.warning(f"Skipping {p_name} ...")
+                logger.warning(f"[uid={i}] Skipping {p_name} ...")
                 continue
             else:
-                logger.info(f"Collecting {p_name} ...")
+                logger.info(f"[uid={i}] Collecting {p_name} ...")
             
             # if match, submit a copy/parsing task
             futures.append(extract2target.remote(it, output_dir))
@@ -138,11 +138,11 @@ class DataEngine:
                     status = res[0]
                     if status == "success":
                         total_count += 1
-                        logger.info(f"[uid={total_count}/{len(futures)}] Processed: {res[1]}")
+                        logger.info(f"[{total_count}/{len(futures)}] Processed: {res[1]}")
                     elif status == "skipped":
-                        logger.warning(f"[uid={total_count}/{len(futures)}] Skipped (exists): {res[1]}")
+                        logger.warning(f"[{total_count}/{len(futures)}] Skipped (exists): {res[1]}")
                     elif status == "failed":
-                        logger.error(f"[uid={total_count}/{len(futures)}] Failed: {res[1]} Error: {res[2]}")
+                        logger.error(f"[{total_count}/{len(futures)}] Failed: {res[1]} Error: {res[2]}")
                         failures.append(res[1])
 
         # collecting remaining futures
@@ -153,11 +153,11 @@ class DataEngine:
                 status = res[0]
                 if status == "success":
                     total_count += 1
-                    logger.info(f"[uid={total_count}] Processed: {res[1]}")
+                    logger.info(f"[{total_count}] Processed: {res[1]}")
                 elif status == "skipped":
-                    logger.warning(f"[uid={total_count}] Skipped (exists): {res[1]}")
+                    logger.warning(f"[{total_count}] Skipped (exists): {res[1]}")
                 elif status == "failed":
-                    logger.error(f"[uid={total_count}] Failed: {res[1]} Error: {res[2]}")
+                    logger.error(f"[{total_count}] Failed: {res[1]} Error: {res[2]}")
                     failures.append(res[1])
                     
         failures_file = output_dir / "failures.txt"
