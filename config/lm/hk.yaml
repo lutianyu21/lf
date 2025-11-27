@@ -1,0 +1,2 @@
+model_type:   qwen3_0.6B
+model_dir:    /GenSIvePFS/users/lutianyu/lf/output/checkpoints/qwen3@rcsb+swissprot@debug_folding+sequence/checkpoint-20000

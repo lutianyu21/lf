@@ -3,6 +3,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import logging
+from unittest import result
 import colorlog
 import pickle
 import os
@@ -127,26 +128,26 @@ def _stream_iterate_cameo(data_dir: str | Path) -> Iterator[Path]:
 
 
 
-@ray.remote
-def process_file(input_path: Path, output_dir: Path, clear: bool):
-    """
-        ("success", output_path) -> success
-        ("skipped", output_path) -> skipped
-        ("failed", input_path, str(error)) -> failed
-    """
-    output_path = output_dir / (input_path.name.strip('.gz').strip('.cif').strip('.pdb') + ".pkl")
-    if output_path.exists():
-        if clear: input_path.unlink()
-        return ("skipped", str(output_path))
-    try:
-        protein = OpenfoldProtein.from_file(input_path)
-        with output_path.open("wb") as f:
-            pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
-        if clear: input_path.unlink()
-        return ("success", str(output_path))
-    except Exception as e:
-        if clear: input_path.unlink()
-        return ("failed", str(input_path), str(e))
+# @ray.remote
+# def process_file(input_path: Path, output_dir: Path, clear: bool):
+#     """
+#         ("success", output_path) -> success
+#         ("skipped", output_path) -> skipped
+#         ("failed", input_path, str(error)) -> failed
+#     """
+#     output_path = output_dir / (input_path.name.strip('.gz').strip('.cif').strip('.pdb') + ".pkl")
+#     if output_path.exists():
+#         if clear: input_path.unlink()
+#         return ("skipped", str(output_path))
+#     try:
+#         protein = OpenfoldProtein.from_file(input_path)
+#         with output_path.open("wb") as f:
+#             pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
+#         if clear: input_path.unlink()
+#         return ("success", str(output_path))
+#     except Exception as e:
+#         if clear: input_path.unlink()
+#         return ("failed", str(input_path), str(e))
     
 
 def step1_pickle(
@@ -534,89 +535,231 @@ def step3_merge(
     
     
     
-    
+
+@ray.remote
+def process_file(input_path: Path, output_dir: Path, clear: bool):
+    """
+        ("success", output_path) -> success
+        ("skipped", output_path) -> skipped
+        ("failed", input_path, str(error)) -> failed
+    """
+    output_path = output_dir / (input_path.name.strip('.gz').strip('.cif').strip('.pdb') + ".pkl")
+    if output_path.exists():
+        if clear: input_path.unlink()
+        return ("skipped", str(output_path))
+    try:
+        protein = OpenfoldProtein.from_file(input_path)
+        with output_path.open("wb") as f:
+            pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
+        if clear: input_path.unlink()
+        return ("success", str(output_path))
+    except Exception as e:
+        if clear: input_path.unlink()
+        return ("failed", str(input_path), str(e))
 
 
 
+
+@ray.remote
+def copy_file(input_path: Path, output_dir: Path):
+    # maintain the original file name
+    try:
+        output_path = output_dir / input_path.name
+        if output_path.exists():
+            return ("skipped", str(output_path))
+        else:     
+            shutil.copy2(input_path, output_path)
+            return ("success", str(output_path))
+    except Exception as e:
+        return ("failed", str(input_path), str(e))
 
 
 class DataEngine():
     
-    
+    # scan AFDB / SwissProt / RCSB / CASP / CAMEO dataset and yield file paths
+    # updated api:
     @classmethod
-    def pickle(
-        cls,
-        dataset_name:  str,
-    ):
-        pass
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    # TODO many efforts to support larger-scale processing
-    @classmethod
-    def process_icl_data(
-        cls,
-        m8_path:        str | Path,
-        query_path:     str | Path,
-        target_path:    str | Path,
-        output_path:    str | Path,
-    ):
-        # Synthesis based on already tokenized data
-        # Currently pandas is enough
-        import pandas as pd
-        if isinstance(m8_path, str): m8_path = Path(m8_path)
-        if isinstance(query_path, str): query_path = Path(query_path)
-        if isinstance(target_path, str): target_path = Path(target_path)
-        if isinstance(output_path, str): output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+    def _scan_hk_afdb(cls) -> Iterator[Path]:
+        tmp_root = Path(tempfile.gettempdir()) / f"pid_{os.getpid()}"
+        tmp_root.mkdir(parents=True, exist_ok=True)
         
-        # - text: 
-        #   identity={0.2}:<seq>tmpl1</seq><struct>struct1</struct>\n
-        #   identity={0.3}:<seq>tmpl2</seq><struct>struct2</struct>\n
-        #   identity={0.4}:<seq>tmpl3</seq><struct>struct3</struct>\n
-        #   <seq>query</seq> || <struct>struct</struct>
-        icl_rows = []
-        query_df = pd.read_json(query_path, lines=False)
-        target_df = pd.read_json(target_path, lines=False)
-        m8_df = pd.read_csv(m8_path, sep="\t", header=None)
-        for name, group in m8_df.groupby(0):
-            time_start = time.time()
-            query, target_list, identity_list = name, group[1], group[2]
-            context = []
-            
-            try:
-                query_row = query_df[query_df['pdb_name'] == query].iloc[0]
-            except Exception:
-                logger.warning(f"Query {query} not found in tokenized data.")
-                continue
-            
-            for target, identity in zip(target_list, identity_list):
-                # try to locate targets
+        # e.g. for proteome-tax_id-1974607-0_v4.tar, we have
+        # - AF-A0A2H0UIM4-F1-model_v4.cif.gz
+        # - AF-A0A2H0UIM4-F1-confidence_v4.json.gz
+        # - AF-A0A2H0UIM4-F1-predicted_aligned_error_v4.json.gz
+        # scanning will return 
+        # - tmp_root/AF-A0A2H0UIM4-F1-model_v4.cif.gz
+        for split_dir in [
+            Path("/home/projects/protein/lutianyu/data/AFDB/part_00"),
+            Path("/home/projects/protein/lutianyu/data/AFDB/part_01"),
+            Path("/home/projects/protein/lutianyu/data/AFDB/part_02"),
+            Path("/home/projects/protein/lutianyu/data/AFDB/part_03"),
+            Path("/home/projects/protein/lutianyu/data/AFDB/part_04"),
+            Path("/home/projects/protein/lutianyu/data/AFDB/part_05_dest"),
+            Path("/home/projects/protein/lutianyu/data/AFDB/part_06"),
+        ]:
+            for tar_path in split_dir.glob("proteome-tax_id-*_v4.tar"):
                 try:
-                    target_row = target_df[target_df['pdb_name'] == target].iloc[0]
-                except Exception:
-                    logger.warning(f"Target {target} not found in tokenized data.")
-                    continue
-                context.append(f'identity={identity}:{target_row["text"]}')
-            
-            # copy query row
-            icl_row = query_row.copy()
-            icl_row['text'] = '\n'.join(context + [query_row["text"]])
-            if 'prompt' in icl_row:
-                icl_row['prompt'] = '\n'.join(context + [query_row["prompt"]])
+                    with tarfile.open(tar_path, "r") as tf:
+                        for member in tf:
+                            if member.name.endswith("-F1-model_v4.cif.gz"):
+                                f = tf.extractfile(member)
+                                if f is None: continue
+                                tmp_path = tmp_root / Path(member.name).name
+                                with open(tmp_path, "wb") as out_f:
+                                    shutil.copyfileobj(f, out_f)
+                                yield tmp_path
+                except Exception as e:
+                    logger.error(f"Failed to extract {tar_path}: {e}")
+    
+    def _query_hk_afdb(
+        self,
+        query_path: Path,
+        output_dir: Path,
+        max_concurrent: int,
+    ):
+        if not query_path.name.endswith('.txt'): raise NotImplementedError()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # load query set: AF_AFQ8UGE8F1_1 AF_AFQ8ZB83F1_1 ...
+        query_set = set()
+        with open(query_path, 'r') as f:
+            for line in f:
+                for item in line.strip().split():
+                    if not item.startswith('AF'):
+                        logger.warning(f"Ignore query item: {item}")
+                    else:
+                        # FIX here: uniref-style AF_AFA0A075B5T2F1_1; HK-style AF-AFA0A075B5T2F1-F1-model_v4.cif.gz
+                        item_fixed = item.replace('_', '-').replace('_1', '-F1-model_v4.cif.gz')
+                        query_set.add(item_fixed)
+
+        total_count = 0
+        failures,futures = [], []
+        for i, p in enumerate(self._scan_hk_afdb()):
+            if p.name not in query_set:
+                logger.warning(f"Skipping {p.name} as it is not in the query set.")
+                continue
+            else:
+                logger.info(f"Collecting {p.name} as it is in the query set.")
                 
-            # collect icl_row and save to output
-            icl_rows.append(icl_row)
-            elapsed = time.time() - time_start
-            time_start = time.time()
-            logger.info(f"[{elapsed:.2f}s] Processed ICL for {query} with {len(context)} templates.")
-        icl_df = pd.DataFrame(icl_rows)
-        icl_df.to_json(output_path, lines=False, orient='records', indent=4)
-        logger.info(f"[Done] Saved ICL processed data to {output_path}")
+            # if match, submit a copy/parsing task
+            futures.append(copy_file.remote(p, output_dir))
+            total_count += 1
+            
+            if len(futures) >= max_concurrent:
+                done, futures = ray.wait(futures, num_returns=max_concurrent)
+                done_results = ray.get(done)
+                for res in done_results:
+                    status = res[0]
+                    if status == "success":
+                        logger.info(f"[uid={total_count}] Processed: {res[1]}")
+                    elif status == "skipped":
+                        logger.warning(f"[uid={total_count}] Skipped (exists): {res[1]}")
+                    elif status == "failed":
+                        logger.error(f"[uid={total_count}] Failed: {res[1]} Error: {res[2]}")
+                        failures.append(res[1])
+
+        # collecting remaining futures
+        while futures:
+            done, futures = ray.wait(futures, num_returns=min(max_concurrent, len(futures)))
+            done_results = ray.get(done)
+            for res in done_results:
+                status = res[0]
+                if status == "success":
+                    logger.info(f"[uid={total_count}] Processed: {res[1]}")
+                elif status == "skipped":
+                    logger.warning(f"[uid={total_count}] Skipped (exists): {res[1]}")
+                elif status == "failed":
+                    logger.error(f"[uid={total_count}] Failed: {res[1]} Error: {res[2]}")
+                    failures.append(res[1])
+                    
+        failures_file = output_dir / "failures.txt"
+        if failures_file.exists(): failures_file.unlink()
+        if failures:
+            with open(failures_file, "w") as f:
+                for item in failures:
+                    f.write(f"{item}\n")
+            logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
+        logger.info(f"All tasks completed. Total submitted: {total_count}")
+
+            
+   
+
+            
+
+        
+        
+        
+
+    
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    # # TODO many efforts to support larger-scale processing
+    # @classmethod
+    # def process_icl_data(
+    #     cls,
+    #     m8_path:        str | Path,
+    #     query_path:     str | Path,
+    #     target_path:    str | Path,
+    #     output_path:    str | Path,
+    # ):
+    #     # Synthesis based on already tokenized data
+    #     # Currently pandas is enough
+    #     import pandas as pd
+    #     if isinstance(m8_path, str): m8_path = Path(m8_path)
+    #     if isinstance(query_path, str): query_path = Path(query_path)
+    #     if isinstance(target_path, str): target_path = Path(target_path)
+    #     if isinstance(output_path, str): output_path = Path(output_path)
+    #     output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+    #     # - text: 
+    #     #   identity={0.2}:<seq>tmpl1</seq><struct>struct1</struct>\n
+    #     #   identity={0.3}:<seq>tmpl2</seq><struct>struct2</struct>\n
+    #     #   identity={0.4}:<seq>tmpl3</seq><struct>struct3</struct>\n
+    #     #   <seq>query</seq> || <struct>struct</struct>
+    #     icl_rows = []
+    #     query_df = pd.read_json(query_path, lines=False)
+    #     target_df = pd.read_json(target_path, lines=False)
+    #     m8_df = pd.read_csv(m8_path, sep="\t", header=None)
+    #     for name, group in m8_df.groupby(0):
+    #         time_start = time.time()
+    #         query, target_list, identity_list = name, group[1], group[2]
+    #         context = []
+            
+    #         try:
+    #             query_row = query_df[query_df['pdb_name'] == query].iloc[0]
+    #         except Exception:
+    #             logger.warning(f"Query {query} not found in tokenized data.")
+    #             continue
+            
+    #         for target, identity in zip(target_list, identity_list):
+    #             # try to locate targets
+    #             try:
+    #                 target_row = target_df[target_df['pdb_name'] == target].iloc[0]
+    #             except Exception:
+    #                 logger.warning(f"Target {target} not found in tokenized data.")
+    #                 continue
+    #             context.append(f'identity={identity}:{target_row["text"]}')
+            
+    #         # copy query row
+    #         icl_row = query_row.copy()
+    #         icl_row['text'] = '\n'.join(context + [query_row["text"]])
+    #         if 'prompt' in icl_row:
+    #             icl_row['prompt'] = '\n'.join(context + [query_row["prompt"]])
+                
+    #         # collect icl_row and save to output
+    #         icl_rows.append(icl_row)
+    #         elapsed = time.time() - time_start
+    #         time_start = time.time()
+    #         logger.info(f"[{elapsed:.2f}s] Processed ICL for {query} with {len(context)} templates.")
+    #     icl_df = pd.DataFrame(icl_rows)
+    #     icl_df.to_json(output_path, lines=False, orient='records', indent=4)
+    #     logger.info(f"[Done] Saved ICL processed data to {output_path}")

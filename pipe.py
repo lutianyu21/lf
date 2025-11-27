@@ -77,7 +77,6 @@ logger.setLevel(logging.INFO)
 logger.propagate = False
 
 
-
 # Implementation of SFT trainer
 @hydra.main(version_base=None, config_path="./config", config_name="config.yaml")
 def sft(config: DictConfig):
@@ -189,7 +188,10 @@ def sft(config: DictConfig):
         eval_collator=ExtraColumnCollator(),
         compute_metrics=PackingFoldingTrainer.compute_metrics,
     )
-    sft_trainer.train() # type: ignore
+    # sft_trainer.train() # type: ignore
+    sft_trainer.evaluate() # type: ignore
+    
+    
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Finished SFT training ...')
 
