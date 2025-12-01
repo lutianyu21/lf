@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Specify srun params to start enroot:
-#SBATCH --account=protein
+#SBATCH --account=su4-protein
 #SBATCH --partition=AISS2024110101      # GenSI-protein-lf
 #SBATCH --job-name=lf-ar                # job name
 #SBATCH --output=output.log             # stdout
@@ -13,7 +13,7 @@
 #SBATCH --mem=2000                      # memory(MB)/node
 #SBATCH --export=ALL
 
-CONTAINER_PATH=/home/projects/protein/lutianyu/images/modern.sqsh
+CONTAINER_PATH=/home/projects/su4-protein/lutianyu/images/modern.sqsh
 CONTAINER_NAME=modern
 
 # Optimized NCCL and CUDA settings for H800 GPUs:
@@ -124,9 +124,9 @@ EOF
 )
 
 echo "=== Cleaning previous builds ==="
-rm -r /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/build && \
-rm -r /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/openfold.egg-info && \
-rm /home/projects/protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/attn_core_inplace_cuda.cpython-310-x86_64-linux-gnu.so
+rm -r /home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/build && \
+rm -r /home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/openfold.egg-info && \
+rm /home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/attn_core_inplace_cuda.cpython-310-x86_64-linux-gnu.so
 echo "================================"
 
 
@@ -143,8 +143,8 @@ fi
 
 # Export variable in the container:
 numactl --cpunodebind=0 --membind=0 srun enroot start -r \
-    --mount /home/projects/protein/lutianyu:/GenSIvePFS/users/lutianyu \
-    --mount /home/projects/protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/raw/rcsb \
+    --mount /home/projects/su4-protein/lutianyu:/GenSIvePFS/users/lutianyu \
+    --mount /home/projects/su4-protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/raw/rcsb \
     -w $CONTAINER_NAME \
     -- /bin/bash -c "
     export SLURM_JOB_ID=$SLURM_JOB_ID; \
