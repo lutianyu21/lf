@@ -231,15 +231,15 @@ class DataEngine:
             pattern = re.compile(r"^proteome-tax_id-\d+-\d+_v4\.tar$")
             
         for split_dir in [
-            # Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_00"),
-            # Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_01"),
-            # Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_02"),
-            # Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_03"),
-            # Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_04"),
-            # Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest"),
-            # Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_06"),
-            Path("/GenSIvePFS/users/lutianyu/lf/trash/part_00"),
-            Path("/GenSIvePFS/users/lutianyu/lf/trash/part_01")
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_00"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_01"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_02"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_03"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_04"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_06"),
+            # Path("/GenSIvePFS/users/lutianyu/lf/trash/part_00"),
+            # Path("/GenSIvePFS/users/lutianyu/lf/trash/part_01")
         ]:
             for tar_path in os.scandir(split_dir):
                 if not pattern.match(tar_path.name): continue
