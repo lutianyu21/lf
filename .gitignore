@@ -28,6 +28,7 @@
 **/cameo2022
 **/pickle
 **/parquet
+/data
 
 /cache
 /pytest

@@ -74,7 +74,7 @@ class ChainId2ChainName:
     BASE = len(CHARS)
 
     def __getitem__(self, idx: int) -> str:
-        if not isinstance(idx, int):
+        if not isinstance(idx, int) and not isinstance(idx, np.integer):
             raise TypeError(f'Chain id must be an integer, got {type(idx)}.')
         if idx < 0:
             raise ValueError(f'Chain id must be non-negative, got {idx}.')
@@ -138,6 +138,7 @@ dtype_template: Dict[str, torch.dtype] = {
     'residue_aatype':       torch.int32,
     'residue_index':        torch.int32,
     'residue_chain_index':  torch.int32,
+    'residue_entity_index': torch.int32,
 }
 
 gemmi_default_protocol = {
@@ -179,70 +180,59 @@ def _gemmi_parser(
     protocol: Dict[str, bool] = gemmi_default_protocol,
     verbose: bool = True,
 ) -> dict:
-    # one can input: 7dz2.cif, 7dz2_C.cif, AF-<ID>.cif.gz
-    # assumption: @ indicates auth_chain_id, % indicates label_chain_id
-    p_copy = p
-    stem = p.name.removesuffix('.gz').removesuffix('.cif')
-    if '%' in stem:
-        subchains_flag = 'label'
-        subchains: List[str] | None = stem.split('%')
-        if len(subchains) > 1:
-            pure_name = subchains[0]
-            subchains = subchains[1:]
-            p = p.parent / (pure_name + ''.join(p.suffixes))
-        else:
-            subchains = None
-    elif '@' in stem:
-        subchains_flag = 'auth'
-        subchains: List[str] | None = stem.split('@')
-        if len(subchains) > 1:
-            pure_name = subchains[0]
-            subchains = subchains[1:]
-            p = p.parent / (pure_name + ''.join(p.suffixes))
-        else:
-            subchains = None
-    else:
-        subchains_flag = 'auth'
-        subchains = None
     
-    # Most possibly due to non-standrd .cif format
+    # < #label_asym_id> < @auth_asym_id> < %entity_id> .cif <.gz>
+    uniref_accesion_extended = p.name.removesuffix('.gz').removesuffix('.cif')
+    sub_by_label_aym_id = '#' in uniref_accesion_extended
+    sub_by_auth_aym_id  = '@' in uniref_accesion_extended
+    sub_by_entity_id    = '%' in uniref_accesion_extended
+    if sub_by_label_aym_id:
+        raise NotImplementedError() # TODO any use case ???
+        uniref_accesion = uniref_accesion_extended.split('#')[0]
+        label_aym_id = uniref_accesion_extended.split('#')[1]
+        p = p.parent / (uniref_accesion + ''.join(p.suffixes))
+    elif sub_by_auth_aym_id:
+        uniref_accession = uniref_accesion_extended.split('@')[0]
+        auth_aym_id = uniref_accesion_extended.split('@')[1]
+        p = p.parent / (uniref_accession + ''.join(p.suffixes))    
+    elif sub_by_entity_id:
+        uniref_accession = uniref_accesion_extended.split('%')[0]
+        entity_id = uniref_accesion_extended.split('%')[1]
+        p = p.parent / (uniref_accession + ''.join(p.suffixes))
+        
+    # load structure
     try:
-        # p or p_copy
         structure = gemmi.read_structure(str(p))
+        structure.remove_alternative_conformations()
+        structure = structure[0]
     except Exception as e:
+        # Most possibly due to non-standrd .cif format
         if verbose:
             raise ValueError(f'Error reading structure from {p}: {e}. Returns empty dict.')
         else:
             print(f'Error parsing structure from {p}: {e}. Returns empty dict.')
             return {}
 
-    structure.remove_alternative_conformations()
-    (it, it_name) = {
-        'auth': (structure[0], [c.name for c in structure[0]]),
-        'label': (structure[0].subchains(), sorted([c.subchain_id() for c in structure[0].subchains()])),
-    }[subchains_flag]
-
+    # parse all chains
     chain2feature: Dict[str, Dict[str, torch.Tensor]] = {}
-    for chain, name in zip(it, it_name):
-        if subchains is not None and name not in subchains:
-            continue
-        feature_template = {
-            'residue_atom37_coord': [],         # [L, 37, 3]
-            'residue_atom37_mask':  [],         # [L, 37]
-            'residue_atom37_bfactor': [],       # [L, 37]
-            'residue_mask':         [],         # [L]
-            'residue_aatype':       [],         # [L]
-            'residue_index':        [],         # [L],
-            'residue_chain_index':  [],         # [L]
-        }
-        
+    for chain, chain_name in zip(structure, [chain.name for chain in structure]):
+        feature = dict(
+            residue_atom37_coord=  [],          # [L, 37, 3]
+            residue_atom37_mask=   [],          # [L, 37]
+            residue_atom37_bfactor=[],          # [L, 37]
+            residue_mask=          [],          # [L]
+            residue_aatype=        [],          # [L]
+            residue_index=         [],          # [L]
+            residue_chain_index=   [],          # [L]
+            residue_entity_index=  [],          # [L]
+        )
         for residue in chain:
             # Default behavior: keep std & non-std aa
+            # TODO we will handle non-protein strcutures in the future
             if protocol['drop_water'] and gemmi_checker['is_water'](residue): continue
             if protocol['drop_ligand'] and gemmi_checker['is_ligand'](residue): continue
             if protocol['drop_na'] and gemmi_checker['is_na'](residue): continue
             if protocol['drop_nonstd'] and (not gemmi_checker['is_standard'](residue)): continue
-            
             atom37_coord = torch.zeros((atom_type_num, 3), dtype=dtype_template['residue_atom37_coord'])    # [37, 3]
             atom37_mask = torch.zeros((atom_type_num), dtype=dtype_template['residue_atom37_mask'])         # [37]
             atom37_bfactor = torch.zeros((atom_type_num), dtype=dtype_template['residue_atom37_bfactor'])   # [37]
@@ -251,47 +241,48 @@ def _gemmi_parser(
                 atom37_coord[atom_order[atom.name]] = torch.tensor((atom.pos.x, atom.pos.y, atom.pos.z), dtype=dtype_template['residue_atom37_coord'])
                 atom37_mask[atom_order[atom.name]] = 1.0
                 atom37_bfactor[atom_order[atom.name]] = atom.b_iso
-            
             # atom-wise
-            feature_template['residue_atom37_coord'].append(atom37_coord)
-            feature_template['residue_atom37_mask'].append(atom37_mask)
-            feature_template['residue_atom37_bfactor'].append(atom37_bfactor)
-            
+            feature['residue_atom37_coord'].append(atom37_coord)
+            feature['residue_atom37_mask'].append(atom37_mask)
+            feature['residue_atom37_bfactor'].append(atom37_bfactor)
             # residue-wise
             restype_idx = restype_order_with_x[restype_3to1.get(residue.name, 'X')]
-            feature_template['residue_mask'].append(atom37_mask[1].to(dtype_template['residue_mask']))
-            feature_template['residue_aatype'].append(
-                torch.tensor(restype_idx, dtype=dtype_template['residue_aatype'])
-            )
-            feature_template['residue_index'].append(
-                torch.tensor(residue.seqid.num, dtype=dtype_template['residue_index'])
-            )
-            feature_template['residue_chain_index'].append(
-                torch.tensor(pdb_chain_order[name], dtype=dtype_template['residue_chain_index'])
-            )
+            feature['residue_mask'].append(atom37_mask[1].to(dtype_template['residue_mask']))
+            feature['residue_aatype'].append(torch.tensor(restype_idx, dtype=dtype_template['residue_aatype']))
+            feature['residue_index'].append(torch.tensor(residue.seqid.num, dtype=dtype_template['residue_index']))
+            feature['residue_chain_index'].append(torch.tensor(pdb_chain_order[chain_name], dtype=dtype_template['residue_chain_index']))
+            feature['residue_entity_index'].append(torch.tensor(eval(residue.entity_id), dtype=dtype_template['residue_entity_index']))
         
-        if feature_template['residue_atom37_coord'] != []:
-            chain2feature[name] = {k: torch.stack(v, dim=0) for k, v in feature_template.items()}
+        if feature['residue_atom37_coord'] == []:
+            continue
+        else:
+            chain2feature[chain_name] = {k: torch.stack(v, dim=0) for k, v in feature.items()}
     
-    # TODO we will handle non-protein strcutures in the future
     if chain2feature == {}:
         if verbose:
-            raise ValueError(f'No residue left after filtering under current protocol. Returns empty dict.')
+            raise ValueError(f'No residue left for {p} under current protocol. Returns empty dict.')
         else:
-            print(f'No residue left for {p.stem} after filtering under current protocol. Returns empty dict.')
+            print(f'No residue left for {p} under current protocol. Returns empty dict.')
             return {}
+        
+    if sub_by_auth_aym_id:
+        # find the first(unique) chain with the auth_aym_id
+        for chain_id in chain2feature:
+            if chain_id == auth_aym_id:
+                return chain2feature[chain_id]
+    elif sub_by_entity_id:
+        # find the first chain with the entity_id
+        for chain_id in chain2feature:
+            if torch.all(chain2feature[chain_id]['residue_entity_index'] == int(entity_id)):
+                return chain2feature[chain_id]
     
-    # Concat different chains
-    if protocol['aggregate']:
-        feature_names = list(next(iter(chain2feature.values())).keys())
-        return {
-            feature_name: torch.cat([
-                chain2feature[chain_id][feature_name] for chain_id in chain2feature
-            ], dim=0)
-            for feature_name in feature_names
-        }
-    else:
-        return chain2feature
+    feature_names = list(next(iter(chain2feature.values())).keys())
+    return {
+        feature_name: torch.cat([
+            chain2feature[chain_id][feature_name] for chain_id in chain2feature
+        ], dim=0)
+        for feature_name in feature_names
+    }
 
 
 class OpenfoldBackbone:
@@ -352,11 +343,12 @@ class OpenfoldProtein:
     entry: str
     residue_atom37_coord:   torch.Tensor
     residue_atom37_mask:    torch.Tensor
+    residue_atom37_bfactor: torch.Tensor
     residue_mask:           torch.Tensor
     residue_aatype:         torch.Tensor
     residue_index:          torch.Tensor
     residue_chain_index:    torch.Tensor
-    residue_atom37_bfactor: torch.Tensor
+    residue_entity_index:   torch.Tensor
     
     def __init__(self):
         super().__init__()
@@ -371,17 +363,17 @@ class OpenfoldProtein:
         if gemmi_out == {}:
             instance.entry = 'empty'
             return instance
-        
         instance.entry = stem
         instance.residue_atom37_coord   = gemmi_out['residue_atom37_coord']
         instance.residue_atom37_mask    = gemmi_out['residue_atom37_mask']
+        instance.residue_atom37_bfactor = gemmi_out['residue_atom37_bfactor']
         instance.residue_mask           = gemmi_out['residue_mask']
         instance.residue_aatype         = gemmi_out['residue_aatype']
         instance.residue_index          = gemmi_out['residue_index']
         instance.residue_chain_index    = gemmi_out['residue_chain_index']
-        instance.residue_atom37_bfactor = gemmi_out['residue_atom37_bfactor']
+        instance.residue_entity_index   = gemmi_out['residue_entity_index']
         return instance
-
+    
     @classmethod
     def from_dict(cls, feature_in: Dict[str, Any]):
         instance = cls()
@@ -391,37 +383,40 @@ class OpenfoldProtein:
             else torch.from_numpy(feature_in[k])
         instance.residue_atom37_coord = fn('residue_atom37_coord')
         instance.residue_atom37_mask = fn('residue_atom37_mask')
+        instance.residue_atom37_bfactor = fn('residue_atom37_bfactor')
         instance.residue_mask = fn('residue_mask')
         instance.residue_aatype = fn('residue_aatype')
         instance.residue_index = fn('residue_index')
         instance.residue_chain_index = fn('residue_chain_index')
-        instance.residue_atom37_bfactor = fn('residue_atom37_bfactor')
+        instance.residue_entity_index = fn('residue_entity_index')
         return instance
     
     def to_dict(self) -> Dict[str, Any]:
         return {
-            'entry': self.entry,
+            'entry':                self.entry,
             'residue_atom37_coord': self.residue_atom37_coord.cpu().numpy(),
-            'residue_atom37_mask': self.residue_atom37_mask.cpu().numpy(),
-            'residue_mask': self.residue_mask.cpu().numpy(),
-            'residue_aatype': self.residue_aatype.cpu().numpy(),
-            'residue_index': self.residue_index.cpu().numpy(),
-            'residue_chain_index': self.residue_chain_index.cpu().numpy(),
+            'residue_atom37_mask':  self.residue_atom37_mask.cpu().numpy(),
             'residue_atom37_bfactor': self.residue_atom37_bfactor.cpu().numpy(),
+            'residue_mask':         self.residue_mask.cpu().numpy(),
+            'residue_aatype':       self.residue_aatype.cpu().numpy(),
+            'residue_index':        self.residue_index.cpu().numpy(),
+            'residue_chain_index':  self.residue_chain_index.cpu().numpy(),
+            'residue_entity_index': self.residue_entity_index.cpu().numpy(),
         }
     
     @classmethod
     def from_backbone(cls, backbone: OpenfoldBackbone):
+        L, device = len(backbone), backbone.residue_atom37_coord.device
         instance = cls()
         instance.entry = backbone.entry
         instance.residue_atom37_coord = backbone.residue_atom37_coord
         instance.residue_atom37_mask = backbone.residue_atom37_mask
-        L, device = len(backbone), backbone.residue_atom37_coord.device
+        instance.residue_atom37_bfactor = torch.zeros(L, atom_type_num, device=device, dtype=dtype_template['residue_atom37_bfactor'])
         instance.residue_mask = backbone.residue_atom37_mask[:, 1].to(dtype_template['residue_mask'])
         instance.residue_aatype = torch.zeros(L, device=device, dtype=dtype_template['residue_aatype'])
         instance.residue_index = torch.arange(L, device=device, dtype=dtype_template['residue_index'])
         instance.residue_chain_index = torch.zeros(L, device=device, dtype=dtype_template['residue_chain_index'])
-        instance.residue_atom37_bfactor = torch.zeros(L, atom_type_num, device=device, dtype=dtype_template['residue_atom37_bfactor'])
+        instance.residue_entity_index = torch.zeros(L, device=device, dtype=dtype_template['residue_entity_index'])
         return instance
     
     def __len__(self) -> int:
@@ -435,36 +430,15 @@ class OpenfoldProtein:
         s = ''.join(res_shortname)
         return s
     
-    def split(self) -> List['OpenfoldProtein']:
-        # split a multi-chain protein into single-chain proteins
-        unique_chain_idx = torch.unique(self.residue_chain_index)
-        protein_list = []
-        for cidx in unique_chain_idx:
-            mask = self.residue_chain_index == cidx
-            chain_name = pdb_chain_ids[int(cidx.item())]
-            protein = OpenfoldProtein.from_dict(
-                {
-                    'entry': f'{self.entry}@{chain_name}',
-                    'residue_atom37_coord': self.residue_atom37_coord[mask],
-                    'residue_atom37_mask': self.residue_atom37_mask[mask],
-                    'residue_mask': self.residue_mask[mask],
-                    'residue_aatype': self.residue_aatype[mask],
-                    'residue_index': self.residue_index[mask],
-                    'residue_chain_index': self.residue_chain_index[mask],
-                    'residue_atom37_bfactor': self.residue_atom37_bfactor[mask],
-                }
-            )
-            protein_list.append(protein)
-        return protein_list
-
     def to(self, device: str | torch.device):
         self.residue_atom37_coord = self.residue_atom37_coord.to(device)
         self.residue_atom37_mask = self.residue_atom37_mask.to(device)
+        self.residue_atom37_bfactor = self.residue_atom37_bfactor.to(device)
         self.residue_mask = self.residue_mask.to(device)
         self.residue_aatype = self.residue_aatype.to(device)
         self.residue_index = self.residue_index.to(device)
         self.residue_chain_index = self.residue_chain_index.to(device)
-        self.residue_atom37_bfactor = self.residue_atom37_bfactor.to(device)
+        self.residue_entity_index = self.residue_entity_index.to(device)
         return self
     
     def to_pdb(self, path: str | Path): 
