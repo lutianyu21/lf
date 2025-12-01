@@ -1,4 +1,8 @@
+from csv import writer
+import random
+import time
 from typing import Iterator, Optional, Tuple, Any, List
+import pyarrow
 import ray
 import re
 import os
@@ -9,8 +13,13 @@ import pickle
 import colorlog
 import logging
 import pandas as pd
+import numpy as np
 import torch
 from transformers import AutoTokenizer, Qwen2TokenizerFast
+
+import ray
+from ray.util.actor_pool import ActorPool
+from ray.util.queue import Queue
 
 from utils.openfold_utils.io import OpenfoldProtein
 from .protein_tokenizer import DPLMProteinTokenizer, DistMatrixTokenizer
@@ -90,6 +99,40 @@ class GPUWorker:
         return self.processor.preprocess_dataset(self.dataset_name,batch, verbose=False)
 
 
+@ray.remote
+class PickleWorker:
+    # n producers reading pickles from disk
+    def __init__(self, pickle_dir: str, batch_size: int, group_size: int, group_id: int): 
+        self.pickle_dir = Path(pickle_dir)
+        self.group_size = group_size
+        self.group_id = group_id
+        self.batch_size = batch_size
+
+    def fn(self, out_queue: Queue):
+        batch = []
+        count = 0 
+        with os.scandir(self.pickle_dir) as it:
+            for entry in it:
+                if not entry.is_file() or not entry.name.endswith(".pkl"): continue
+                count += 1
+                if count % self.group_size != self.group_id: continue
+                try:
+                    with open(entry.path, "rb") as f:
+                        obj = pickle.load(f)
+                    batch.append(obj)
+                    if len(batch) >= self.batch_size:
+                        out_queue.put(batch)
+                        batch = []
+                except Exception as e:
+                    logger.error(f"Failed to read {entry.path}: {e}")
+        if batch: out_queue.put(batch)
+        out_queue.put(None)
+
+
+
+
+
+
 
 
 
@@ -161,6 +204,14 @@ def extract2target(
 
 
 class DataEngine:
+    
+    @classmethod
+    def _seed_everything(cls, seed: int):
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
     
     ### Scanning Functions ###
     # scan AFDB / SwissProt / RCSB / CASP / CAMEO dataset and yield paths
@@ -371,6 +422,105 @@ class DataEngine:
         
         
     ### process functions ###
+    # def process_pickle2parquet(
+    #     self,
+    #     pickle_dir: Path,
+    #     output_dir: Path,
+    #     bsz: int,
+    #     num_consumers: int,
+    #     num_producers: int,
+    # ):
+    #     self._seed_everything(2025)
+    #     queue = Queue(100)
+    #     consumers = [GPUWorker.remote() for _ in range(num_consumers)]
+    #     producers = [PickleWorker.remote(str(pickle_dir), bsz, num_producers, i) for i in range(num_producers)]
+    #     num_consumers_max = num_consumers * 2
+    #     num_producers_done = 0
+    #     time_start = time.time()
+    #     writer_checkpoint_frequency = 100000
+    #     writer_checkpoint_buffer = 0
+    #     writer_checkpoint_cnt = 0
+        
+        
+        
+    #     # start producers
+    #     for p in producers: p.fn.remote(queue)  # type: ignore
+        
+    #     bid = 0
+        
+    #     parquet_writer = None
+    #     pending_refs = []
+        
+        
+        
+
+    #     while True:
+    #         batch = queue.get()
+    #         if batch is None:
+    #             num_producers_done += 1
+    #             if num_producers_done >= num_producers: break
+    #             continue
+            
+    #         # submit to a consumer
+    #         current_consumer = consumers[bid % num_consumers]
+    #         ref = current_consumer.fn.remote(batch)  # type: ignore
+    #         pending_refs.append(ref)
+    #         bid += 1
+            
+    #         if len(pending_refs) >= num_consumers_max:
+    #             ready, pending_refs = ray.wait(pending_refs, num_returns=1)
+    #             result = ray.get(ready[0])
+    #             elapsed = time.time() - time_start
+    #             time_start = time.time()
+    #             logger.info(f"[{int(elapsed)}s] Processed [{len(result)}] items (pending={len(pending_refs)})")
+
+    #             # write to parquet
+    #             table = pyarrow.Table.from_pylist(result)
+    #             if parquet_writer is None:
+    #                 dst_file = output_dir / f"dataset_part{current_part}.parquet"
+    #                 parquet_writer = pyarrow.parquet.ParquetWriter(str(dst_file), table.schema, compression="snappy") # type: ignore
+    #             parquet_writer.write_table(table)
+    #             writer_checkpoint_buffer += len(result)
+                
+    #             # save checkpoint
+    #             if writer_checkpoint_buffer >= writer_checkpoint_frequency:
+    #                 parquet_writer.close()
+    #                 logger.info(f"[parquet{current_part}] finished with {writer_checkpoint_buffer} entries.")
+    #                 writer_checkpoint_buffer = 0
+    #                 writer_checkpoint_cnt += 1
+    #                 parquet_writer = None
+            
+    #     if len(pending_refs) >= gpu_workers_max:
+    #         ready, pending_refs = ray.wait(pending_refs, num_returns=1)
+    #         result = ray.get(ready[0])
+    #         elapsed = time.time() - time_start
+    #         time_start = time.time()
+    #         logger.info(f"[{int(elapsed)}s] Processed batch of {len(result)} items (pending={len(pending_refs)})")
+
+    #         table = pyarrow.Table.from_pylist(result)
+    #         if parquet_writer is None:
+    #             dst_file = dst_dir / f"dataset_part{current_part}.parquet"
+    #             parquet_writer = pyarrow.parquet.ParquetWriter(str(dst_file), table.schema, compression="snappy")
+    #         parquet_writer.write_table(table)
+    #         current_part_size += len(result)
+            
+    #         if current_part_size >= part_size:
+    #             parquet_writer.close()
+    #             logger.info(f"✅ Part {current_part} finished with {current_part_size} entries.")
+    #             current_part += 1
+    #             current_part_size = 0
+    #             parquet_writer = None
+        
+        
+        
+        
+        
+    #     gpu_workers = [GPUWorker.remote(dataset_name, tokenizer_name) for _ in range(num_gpu_workers)]
+    #     gpu_workers_max = num_gpu_workers * 2
+    #     cpu_workers = [PickleWorker.remote(str(src_dir), batch_size, num_cpu_workers, i) for i in range(num_cpu_workers)]
+    #     cpu_workers_done = 0
+    #     for w in cpu_workers:
+    #         w.fn.remote(queue)  # type: ignore
     
         
         
