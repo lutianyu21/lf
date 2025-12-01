@@ -241,7 +241,7 @@ class DataEngine:
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_06"),
         ]
         
-        for split_dir in DATASET if shard_id < 0 else [DATASET[shard_id]]:
+        for split_dir in (DATASET if shard_id < 0 else [DATASET[shard_id]]):
             # HINT: we should extract .tar here to avoid extracting multiple times
             for tar_path in split_dir.glob("proteome-tax_id-*_v4.tar"):
                 try:
