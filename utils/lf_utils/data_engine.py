@@ -161,21 +161,21 @@ def extract2target(
                 f = tf.extractfile(member)
                 if f is None:
                     return ("failed", member_name, "Extracted file is None")
-                target_path = output_dir / Path(member.name).name
-                if target_path.exists():
-                    return ("skipped", member_name)
-                with open(target_path, "wb") as out_f:
-                    shutil.copyfileobj(f, out_f)
-                # one can chooose to save as text/pickle
-                if pickle_dir is not None:
-                    pickle_dir.mkdir(parents=True, exist_ok=True)
-                    protein = OpenfoldProtein.from_file(target_path)
-                    pickle_path = pickle_dir / (protein.entry + ".pkl")
-                    with pickle_path.open("wb") as f:
-                        pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
-                return ("success", member_name)
+            target_path = output_dir / Path(member.name).name
+            if target_path.exists():
+                return ("skipped", member_name)
+            with open(target_path, "wb") as out_f:
+                shutil.copyfileobj(f, out_f)
+            # one can chooose to save as text/pickle
+            if pickle_dir is not None:
+                pickle_dir.mkdir(parents=True, exist_ok=True)
+                protein = OpenfoldProtein.from_file(target_path)
+                pickle_path = pickle_dir / (protein.entry + ".pkl")
+                with pickle_path.open("wb") as f:
+                    pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
+            return ("success", member_name)
         
-        elif isinstance(iter, Path):
+        else:
             # 1ema%1.cif | 1ema.cif.gz
             uniref_accession_extended = iter.name.removesuffix('.gz').removesuffix('.cif')
             uniref_accession = uniref_accession_extended[0:4]
@@ -191,8 +191,6 @@ def extract2target(
                     with pickle_path.open("wb") as f:
                         pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
                 return ("success", uniref_accession_extended)
-        else:
-            raise NotImplementedError()
     except Exception as e:
         return ("failed", iter, str(e))
 
