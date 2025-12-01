@@ -293,11 +293,11 @@ class DataEngine:
             logger.info(f'[{i}] Scanning AFDB tar: {tar_path} ...')
             # remove.cif.gz，to get accession ID
             p_name = Path(Path(member_name).name).stem
-            p_name = Path(p_name).stem 
+            p_name = Path(p_name).stem
             
             # proteome-tax_id-112772-0_v4.tar
             # if is required accession, submit task
-            tax_id = eval(tar_path.name.split('-')[2])
+            tax_id = int(tar_path.name.split('-')[2])
             if tax_id in grouped_queries:
                 required_accessions = grouped_queries[tax_id]
                 if p_name in required_accessions:
