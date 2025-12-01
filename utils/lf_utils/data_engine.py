@@ -300,12 +300,12 @@ class DataEngine:
                 required_accessions = grouped_queries[tax_id]
                 if p_name in required_accessions:
                     logger.warning(f'Found required accession: {p_name} in tax_id: {tax_id}')
-                    futures.append(extract2target.remote(it, rawfile_dir, pickle_dir))
+                    futures.append(extract2target.remote(it, rawfile_dir, None))
             
             # reduce memory pressure
             print(len(futures), max_concurrent)
             if len(futures) >= max_concurrent:
-                done, futures = ray.wait(futures, num_returns=8)
+                done, futures = ray.wait(futures, num_returns=1)
                 print('here')
                 done_results = ray.get(done)
                 print(done_results, type(done_results))
