@@ -307,15 +307,15 @@ class DataEngine:
             # reduce memory pressure
             print(len(futures), max_concurrent)
             if len(futures) >= max_concurrent:
-                done, futures = ray.wait(futures, num_returns=max_concurrent // 2)
+                done, futures = ray.wait(futures, num_returns=8)
                 done_results = ray.get(done)
                 for res in done_results:
                     status = res[0]
                     if status == "success":
-                        hit_count += 1
+                        hit_count = hit_count + 1
                         logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
                     elif status == "skipped":
-                        hit_count += 1
+                        hit_count = hit_count + 1
                         logger.warning(f"[{hit_count}/{len(query_set)}] Skipped: {res[1]}")
                     elif status == "failed":
                         failures.append(res[1])
@@ -328,10 +328,10 @@ class DataEngine:
             for res in done_results:
                 status = res[0]
                 if status == "success":
-                    hit_count += 1
+                    hit_count = hit_count + 1
                     logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
                 elif status == "skipped":
-                    hit_count += 1
+                    hit_count = hit_count + 1
                     logger.warning(f"[{hit_count}/{len(query_set)}] Skipped (exists): {res[1]}")
                 elif status == "failed":
                     failures.append(res[1])
