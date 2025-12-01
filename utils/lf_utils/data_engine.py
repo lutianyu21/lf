@@ -305,6 +305,7 @@ class DataEngine:
                     futures.append(extract2target.remote(it, rawfile_dir, pickle_dir))
             
             # reduce memory pressure
+            print(len(futures), max_concurrent)
             if len(futures) >= max_concurrent:
                 done, futures = ray.wait(futures, num_returns=1)
                 done_results = ray.get(done)
