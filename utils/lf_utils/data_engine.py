@@ -291,9 +291,9 @@ class DataEngine:
         hit_count, futures, failures = 0, [], []
         
         # HINT: avoid scanning the whole AFDB multiple times
-        for it in self._scan_afdb():
-            
+        for i, it in enumerate(self._scan_afdb()):
             tar_path, member_name = it
+            logger.info(f'[{i}] Scanning AFDB tar: {tar_path} ...')
             # remove.cif.gz，to get accession ID
             p_name = Path(Path(member_name).name).stem
             p_name = Path(p_name).stem 
