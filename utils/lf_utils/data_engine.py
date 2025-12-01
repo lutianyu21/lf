@@ -289,39 +289,39 @@ class DataEngine:
         # determinitic: taxId O(1); scanning: shardId O(n)
         grouped_queries = bq_df.groupby('taxId')['uniprotAccession'].apply(set).to_dict()
         hit_count, futures, failures = 0, [], []
-        for tax_id, required_accessions in grouped_queries.items():
+        
+        # HINT: avoid scanning the whole AFDB multiple times
+        for it in self._scan_afdb():
             
-            logger.info(f"Scanning AFDB for Tax ID: {tax_id} (Targeting {len(required_accessions)} proteins)")
-            # {tax-id : set(uniprotAccessions)}
-            for it in self._scan_afdb(tax_id=tax_id):
-                if isinstance(it, tuple):
-                    tar_path, member_name = it
-                    # remove.cif.gz，to get accession ID
-                    p_name = Path(Path(member_name).name).stem
-                    p_name = Path(p_name).stem 
-                else:
-                    raise NotImplementedError()
-
-                # submit tasks only if in required_accessions
+            tar_path, member_name = it
+            # remove.cif.gz，to get accession ID
+            p_name = Path(Path(member_name).name).stem
+            p_name = Path(p_name).stem 
+            
+            # proteome-tax_id-112772-0_v4.tar
+            # if is required accession, submit task
+            tax_id = eval(tar_path.name.split('-')[2])
+            if tax_id in grouped_queries:
+                required_accessions = grouped_queries[tax_id]
                 if p_name in required_accessions:
                     futures.append(extract2target.remote(it, rawfile_dir, pickle_dir))
-                
-                # reduce memory pressure
-                if len(futures) >= max_concurrent:
-                    done, futures = ray.wait(futures, num_returns=1)
-                    done_results = ray.get(done)
-                    for res in done_results:
-                        status = res[0]
-                        if status == "success":
-                            hit_count += 1
-                            logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
-                        elif status == "skipped":
-                            hit_count += 1
-                            logger.warning(f"[{hit_count}/{len(query_set)}] Skipped: {res[1]}")
-                        elif status == "failed":
-                            failures.append(res[1])
-                            logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
-                            
+            
+            # reduce memory pressure
+            if len(futures) >= max_concurrent:
+                done, futures = ray.wait(futures, num_returns=1)
+                done_results = ray.get(done)
+                for res in done_results:
+                    status = res[0]
+                    if status == "success":
+                        hit_count += 1
+                        logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
+                    elif status == "skipped":
+                        hit_count += 1
+                        logger.warning(f"[{hit_count}/{len(query_set)}] Skipped: {res[1]}")
+                    elif status == "failed":
+                        failures.append(res[1])
+                        logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
+                          
         # collecting remaining futures
         while futures:
             done, futures = ray.wait(futures)
@@ -422,106 +422,98 @@ class DataEngine:
         
         
     ### process functions ###
-    # def process_pickle2parquet(
-    #     self,
-    #     pickle_dir: Path,
-    #     output_dir: Path,
-    #     bsz: int,
-    #     num_consumers: int,
-    #     num_producers: int,
-    # ):
-    #     self._seed_everything(2025)
-    #     queue = Queue(100)
-    #     consumers = [GPUWorker.remote() for _ in range(num_consumers)]
-    #     producers = [PickleWorker.remote(str(pickle_dir), bsz, num_producers, i) for i in range(num_producers)]
-    #     num_consumers_max = num_consumers * 2
-    #     num_producers_done = 0
-    #     time_start = time.time()
-    #     writer_checkpoint_frequency = 100000
-    #     writer_checkpoint_buffer = 0
-    #     writer_checkpoint_cnt = 0
+    def process_pickle2parquet(
+        self,
+        pickle_dir: Path,
+        output_dir: Path,
+        bsz: int,
+        num_consumers: int,
+        num_producers: int,
+        tokenizer_name: str = "dist",       # dplm / dist tokenizer
+        dataset_name: str = "unicluster",   # will be mapped to feature['split]
+    ):
+        self._seed_everything(2025)
+        output_dir = output_dir / 'parquet'
+        output_dir.mkdir(parents=True, exist_ok=True)
         
+        queue = Queue(100)
+        consumers = [GPUWorker.remote(dataset_name, tokenizer_name) for _ in range(num_consumers)]
+        producers = [PickleWorker.remote(str(pickle_dir), bsz, num_producers, i) for i in range(num_producers)]
+        num_consumers_max = num_consumers * 2
+        num_producers_done = 0
+        time_start = time.time()
+        writer_checkpoint_frequency = 100000
+        writer_checkpoint_buffer = 0
+        writer_checkpoint_cnt = 0
         
-        
-    #     # start producers
-    #     for p in producers: p.fn.remote(queue)  # type: ignore
-        
-    #     bid = 0
-        
-    #     parquet_writer = None
-    #     pending_refs = []
-        
-        
-        
-
-    #     while True:
-    #         batch = queue.get()
-    #         if batch is None:
-    #             num_producers_done += 1
-    #             if num_producers_done >= num_producers: break
-    #             continue
+        logger.info(f"Starting {num_producers} producers and {num_consumers} consumers ...")
+        for w in producers: w.fn.remote(queue)  # type: ignore
+        parquet_writer, bid, pending_refs = None, 0, []
+        while True:
+            batch = queue.get()
+            if batch is None:
+                num_producers_done += 1
+                if num_producers_done >= num_producers: break
+                continue
             
-    #         # submit to a consumer
-    #         current_consumer = consumers[bid % num_consumers]
-    #         ref = current_consumer.fn.remote(batch)  # type: ignore
-    #         pending_refs.append(ref)
-    #         bid += 1
+            # submit to a consumer
+            current_consumer = consumers[bid % num_consumers]
+            ref = current_consumer.fn.remote(batch)  # type: ignore
+            pending_refs.append(ref)
+            bid += 1
             
-    #         if len(pending_refs) >= num_consumers_max:
-    #             ready, pending_refs = ray.wait(pending_refs, num_returns=1)
-    #             result = ray.get(ready[0])
-    #             elapsed = time.time() - time_start
-    #             time_start = time.time()
-    #             logger.info(f"[{int(elapsed)}s] Processed [{len(result)}] items (pending={len(pending_refs)})")
+            if len(pending_refs) >= num_consumers_max:
+                ready, pending_refs = ray.wait(pending_refs, num_returns=1)
+                result = ray.get(ready[0])
+                elapsed = time.time() - time_start
+                time_start = time.time()
+                logger.info(f"[{int(elapsed)}s] Processed [{len(result)}] items (pending={len(pending_refs)})")
 
-    #             # write to parquet
-    #             table = pyarrow.Table.from_pylist(result)
-    #             if parquet_writer is None:
-    #                 dst_file = output_dir / f"dataset_part{current_part}.parquet"
-    #                 parquet_writer = pyarrow.parquet.ParquetWriter(str(dst_file), table.schema, compression="snappy") # type: ignore
-    #             parquet_writer.write_table(table)
-    #             writer_checkpoint_buffer += len(result)
+                # write to parquet
+                table = pyarrow.Table.from_pylist(result)
+                if parquet_writer is None:
+                    parquet_writer = pyarrow.parquet.ParquetWriter( # type: ignore
+                        str(output_dir / f"shard{writer_checkpoint_cnt}.parquet"),
+                        table.schema,
+                        compression="snappy"
+                    )
+                parquet_writer.write_table(table)
+                writer_checkpoint_buffer += len(result)
                 
-    #             # save checkpoint
-    #             if writer_checkpoint_buffer >= writer_checkpoint_frequency:
-    #                 parquet_writer.close()
-    #                 logger.info(f"[parquet{current_part}] finished with {writer_checkpoint_buffer} entries.")
-    #                 writer_checkpoint_buffer = 0
-    #                 writer_checkpoint_cnt += 1
-    #                 parquet_writer = None
+                # save checkpoint
+                if writer_checkpoint_buffer >= writer_checkpoint_frequency:
+                    parquet_writer.close()
+                    logger.info(f"[shard{writer_checkpoint_cnt}] finished with {writer_checkpoint_buffer} entries.")
+                    writer_checkpoint_buffer = 0
+                    writer_checkpoint_cnt += 1
+                    parquet_writer = None
             
-    #     if len(pending_refs) >= gpu_workers_max:
-    #         ready, pending_refs = ray.wait(pending_refs, num_returns=1)
-    #         result = ray.get(ready[0])
-    #         elapsed = time.time() - time_start
-    #         time_start = time.time()
-    #         logger.info(f"[{int(elapsed)}s] Processed batch of {len(result)} items (pending={len(pending_refs)})")
-
-    #         table = pyarrow.Table.from_pylist(result)
-    #         if parquet_writer is None:
-    #             dst_file = dst_dir / f"dataset_part{current_part}.parquet"
-    #             parquet_writer = pyarrow.parquet.ParquetWriter(str(dst_file), table.schema, compression="snappy")
-    #         parquet_writer.write_table(table)
-    #         current_part_size += len(result)
+        logger.info("Waiting for remaining GPU tasks...")
+        while pending_refs:
+            ready, pending_refs = ray.wait(pending_refs, num_returns=1)
+            result = ray.get(ready[0])
+            elapsed = time.time() - time_start
+            time_start = time.time()
+            logger.info(f"[{int(elapsed)}s] Processed [{len(result)}] items (pending={len(pending_refs)})")
             
-    #         if current_part_size >= part_size:
-    #             parquet_writer.close()
-    #             logger.info(f"✅ Part {current_part} finished with {current_part_size} entries.")
-    #             current_part += 1
-    #             current_part_size = 0
-    #             parquet_writer = None
+            # write to parquet
+            table = pyarrow.Table.from_pylist(result)
+            if parquet_writer is None:
+                parquet_writer = pyarrow.parquet.ParquetWriter( # type: ignore
+                    str(output_dir / f"shard{writer_checkpoint_cnt}.parquet"),
+                    table.schema,
+                    compression="snappy"
+                )
+            parquet_writer.write_table(table)
+            writer_checkpoint_buffer += len(result)
+            
+            if writer_checkpoint_buffer >= writer_checkpoint_frequency:
+                parquet_writer.close()
+                logger.info(f"[shard{writer_checkpoint_cnt}] finished with {writer_checkpoint_buffer} entries.")
+                writer_checkpoint_buffer = 0
+                writer_checkpoint_cnt += 1
+                parquet_writer = None
         
-        
-        
-        
-        
-    #     gpu_workers = [GPUWorker.remote(dataset_name, tokenizer_name) for _ in range(num_gpu_workers)]
-    #     gpu_workers_max = num_gpu_workers * 2
-    #     cpu_workers = [PickleWorker.remote(str(src_dir), batch_size, num_cpu_workers, i) for i in range(num_cpu_workers)]
-    #     cpu_workers_done = 0
-    #     for w in cpu_workers:
-    #         w.fn.remote(queue)  # type: ignore
-    
-        
-        
-
+        if parquet_writer is not None:
+            parquet_writer.close()
+        logger.info(f"All batches are processed and saved to {output_dir}")
