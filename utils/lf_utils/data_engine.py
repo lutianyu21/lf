@@ -305,10 +305,8 @@ class DataEngine:
             # reduce memory pressure
             print(len(futures), max_concurrent)
             if len(futures) >= max_concurrent:
-                done, futures = ray.wait(futures, num_returns=1)
-                print('here')
+                done, futures = ray.wait(futures, num_returns=max_concurrent)
                 done_results = ray.get(done)
-                print(done_results, type(done_results))
                 for res in done_results:
                     status = res[0]
                     if status == "success":
