@@ -307,6 +307,7 @@ class DataEngine:
             if len(futures) >= max_concurrent:
                 done, futures = ray.wait(futures, num_returns=8)
                 done_results = ray.get(done)
+                print(done_results)
                 for res in done_results:
                     status = res[0]
                     if status == "success":
