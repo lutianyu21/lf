@@ -17,7 +17,6 @@ DataEngine().query_afdb(
     output_dir=Path("/GenSIvePFS/users/lutianyu/lf/afdb"),
     max_concurrent=1000,
     query_path=Path("/GenSIvePFS/users/lutianyu/lf/clusters-by-entity-40.txt"),
-    bq_path=Path("/GenSIvePFS/users/lutianyu/lf/bq.parquet"),
 )
 
 # DataEngine().process_pickle2parquet(

@@ -130,16 +130,6 @@ class PickleWorker:
 
 
 
-
-
-
-
-
-
-
-
-
-
 @ray.remote
 def extract2target(
     iter: Any,
@@ -193,6 +183,30 @@ def extract2target(
                 return ("success", uniref_accession_extended)
     except Exception as e:
         return ("failed", iter, str(e))
+    
+    
+    
+
+@ray.remote
+def task_cif2pickle(cif_path: Path, pickle_path: Path):
+    # convert .cif.gz to .pickle
+    try:
+        if pickle_path.exists():
+            return ("skipped", cif_path.name)
+        protein = OpenfoldProtein.from_file(cif_path)
+        with pickle_path.open("wb") as f:
+            pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
+        return ("success", cif_path.name)
+    except Exception as e:
+        return ("failed", cif_path.name, str(e))
+
+    
+    
+    
+    
+    
+    
+    
 
 
 
@@ -207,22 +221,15 @@ class DataEngine:
             torch.cuda.manual_seed_all(seed)
     
     ### Scanning Functions ###
-    # scan AFDB / SwissProt / RCSB / CASP / CAMEO dataset and yield paths
+    # scan AFDB / SwissProt / RCSB / CASP / CAMEO dataset and yield path
     @classmethod
-    def _scan_afdb(cls, tax_id: Optional[int] = None) -> Iterator[Tuple[Path, str]]:
+    def _scan_afdb(cls, query: set | None, tmp_dir: Path) -> Iterator[Path]:
         # e.g. for proteome-tax_id-1974607-0_v4.tar, we have
         # - AF-A0A2H0UIM4-F1-model_v4.cif.gz
         # - AF-A0A2H0UIM4-F1-confidence_v4.json.gz
-        # - AF-A0A2H0UIM4-F1-predicted_aligned_error_v4.json.g[z
-        # scanning will return 
-        # - tmp_root/AF-A0A2H0UIM4-F1-model_v4.cif.gz
-        
-        # if tax_id is provided, filter by it proteome-tax_id-{tax_id}-{shard_id}_v4.tar
-        if tax_id is not None:
-            pattern = re.compile(fr"^proteome-tax_id-{tax_id}-\d+_v4\.tar$")
-        else:
-            pattern = re.compile(r"^proteome-tax_id-\d+-\d+_v4\.tar$")
-            
+        # - AF-A0A2H0UIM4-F1-predicted_aligned_error_v4.json.gz
+        # scanning will extract files & return 
+        # - tmp_dir/AF-A0A2H0UIM4-F1-model_v4.cif.gz
         for split_dir in [
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_00"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_01"),
@@ -231,20 +238,28 @@ class DataEngine:
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_04"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_06"),
-            # Path("/GenSIvePFS/users/lutianyu/lf/trash/part_00"),
-            # Path("/GenSIvePFS/users/lutianyu/lf/trash/part_01")
         ]:
-            for tar_path in os.scandir(split_dir):
-                if not pattern.match(tar_path.name): continue
+            # HINT: we should extract .tar here to avoid extracting multiple times
+            for tar_path in split_dir.glob("proteome-tax_id-*_v4.tar"):
                 try:
                     with tarfile.open(tar_path, "r") as tf:
                         for member in tf:
-                            if member.name.endswith("-F1-model_v4.cif.gz"):
-                                # Workers will take care of tmp files
-                                yield (Path(tar_path.path), member.name)
+                            # skip uninterested plddt file
+                            if not member.name.endswith("-F1-model_v4.cif.gz"): continue
+                            
+                            # skip uninterested protein files
+                            if query is not None and member.name.removesuffix('.cif.gz') not in query: continue
+                              
+                            # extract to tmp_dir with the same filename
+                            tmp_path = tmp_dir / member.name
+                            if not tmp_path.exists():
+                                tf.extract(member, path=tmp_dir)
+                            
+                            # yield path for further processing
+                            yield tmp_path
                 except Exception as e:
-                    logger.error(f"Failed to scan {tar_path.path}: {e}")
-                    continue
+                    logger.error(f"Failed to scan {tar_path}: {e}")
+    
     
     ### query functions ###
     def query_afdb(
@@ -252,14 +267,12 @@ class DataEngine:
         output_dir: Path,
         max_concurrent: int,
         query_path: Path,           # a .txt file containing list of accession ids
-        bq_path: Optional[Path],    # a .parquet file containing `taxId` `uniprotAccession`
     ):
-        if not query_path.name.endswith('.txt'): raise NotImplementedError()
+        if not query_path.name.endswith('.txt'): raise NotImplementedError()    
         rawfile_dir = output_dir / "raw"
         pickle_dir = output_dir / "pickle"
         rawfile_dir.mkdir(parents=True, exist_ok=True)
         pickle_dir.mkdir(parents=True, exist_ok=True)
-        output_dir.mkdir(parents=True, exist_ok=True)
         
         # load query set: AF_AFQ8UGE8F1_1 AF_AFQ8ZB83F1_1 ...
         query_set = set()
@@ -272,40 +285,17 @@ class DataEngine:
                         # FIX here: rcsb-style AF_AFA0A075B5T2F1_1 >> uniref-style AF-A0A075B5T2-F1-model_v4
                         item_fixed = f"AF-{item.split('_')[1][2:-2]}-F1-model_v4"
                         query_set.add(item_fixed)
-                        
-        if bq_path is None:
-            logger.warning("No tax_path provided, querying all AFDB entries ...")
-            # TODO a effective way to load all taxId and uniprotAccession from AFDB
-            raise NotImplementedError()
-        else:
-            bq_df = pd.read_parquet(bq_path)
-            bq_df['uniprotAccession'] = bq_df['uniprotAccession'].apply(lambda x: f"AF-{x}-F1-model_v4")
         
-        # determinitic: taxId O(1); scanning: shardId O(n)
-        grouped_queries = bq_df.groupby('taxId')['uniprotAccession'].apply(set).to_dict()
         hit_count, futures, failures = 0, [], []
-        
-        # HINT: avoid scanning the whole AFDB multiple times
-        for i, it in enumerate(self._scan_afdb()):
-            tar_path, member_name = it
-            logger.info(f'[{i}] Scanning AFDB tar: {tar_path} ...')
-            # remove.cif.gz，to get accession ID
-            p_name = Path(Path(member_name).name).stem
-            p_name = Path(p_name).stem
-            
-            # proteome-tax_id-112772-0_v4.tar
-            # if is required accession, submit task
-            tax_id = int(tar_path.name.split('-')[2])
-            if tax_id in grouped_queries:
-                required_accessions = grouped_queries[tax_id]
-                if p_name in required_accessions:
-                    logger.warning(f'Found required accession: {p_name} in tax_id: {tax_id}')
-                    futures.append(extract2target.remote(it, rawfile_dir, None))
+        for i, it in enumerate(self._scan_afdb(query_set, rawfile_dir)):
+            logger.info(f"Submitting task [{i+1}/{len(query_set)}]: {it.name}")
+            # submit a pickle task
+            uniref_accession_extended = it.name.removesuffix('.gz').removesuffix('.cif')
+            futures.append(task_cif2pickle.remote(it, rawfile_dir / f"{uniref_accession_extended}.pkl"))
             
             # reduce memory pressure
-            print(len(futures), max_concurrent)
             if len(futures) >= max_concurrent:
-                done, futures = ray.wait(futures, num_returns=max_concurrent)
+                done, futures = ray.wait(futures, num_returns=1)
                 done_results = ray.get(done)
                 for res in done_results:
                     status = res[0]
@@ -320,6 +310,7 @@ class DataEngine:
                         logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
                           
         # collecting remaining futures
+        logger.info("Collecting remaining tasks ...")
         while futures:
             done, futures = ray.wait(futures)
             done_results = ray.get(done)
