@@ -223,14 +223,15 @@ class DataEngine:
     ### Scanning Functions ###
     # scan AFDB / SwissProt / RCSB / CASP / CAMEO dataset and yield path
     @classmethod
-    def _scan_afdb(cls, query: set | None, tmp_dir: Path) -> Iterator[Path]:
+    def _scan_afdb(cls, query: set | None, tmp_dir: Path, shard_id: int) -> Iterator[Path]:
         # e.g. for proteome-tax_id-1974607-0_v4.tar, we have
         # - AF-A0A2H0UIM4-F1-model_v4.cif.gz
         # - AF-A0A2H0UIM4-F1-confidence_v4.json.gz
         # - AF-A0A2H0UIM4-F1-predicted_aligned_error_v4.json.gz
         # scanning will extract files & return 
         # - tmp_dir/AF-A0A2H0UIM4-F1-model_v4.cif.gz
-        for split_dir in [
+        
+        DATASET = [
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_00"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_01"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_02"),
@@ -238,7 +239,9 @@ class DataEngine:
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_04"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_06"),
-        ]:
+        ]
+        
+        for split_dir in DATASET if shard_id < 0 else [DATASET[shard_id]]:
             # HINT: we should extract .tar here to avoid extracting multiple times
             for tar_path in split_dir.glob("proteome-tax_id-*_v4.tar"):
                 try:
@@ -267,6 +270,7 @@ class DataEngine:
         output_dir: Path,
         max_concurrent: int,
         query_path: Path,           # a .txt file containing list of accession ids
+        shard_id: int = -1,
     ):
         if not query_path.name.endswith('.txt'): raise NotImplementedError()    
         rawfile_dir = output_dir / "raw"
@@ -286,12 +290,11 @@ class DataEngine:
                         item_fixed = f"AF-{item.split('_')[1][2:-2]}-F1-model_v4"
                         query_set.add(item_fixed)
         
+        # submit cif2pickle tasks iteratively
         hit_count, futures, failures = 0, [], []
-        for i, it in enumerate(self._scan_afdb(query_set, rawfile_dir)):
-            logger.info(f"Submitting task [{i+1}/{len(query_set)}]: {it.name}")
-            # submit a pickle task
+        for i, it in enumerate(self._scan_afdb(query_set, rawfile_dir, shard_id=shard_id)):
             uniref_accession_extended = it.name.removesuffix('.gz').removesuffix('.cif')
-            futures.append(task_cif2pickle.remote(it, rawfile_dir / f"{uniref_accession_extended}.pkl"))
+            futures.append(task_cif2pickle.remote(it, pickle_dir / f"{uniref_accession_extended}.pkl"))
             
             # reduce memory pressure
             if len(futures) >= max_concurrent:
@@ -327,7 +330,7 @@ class DataEngine:
                     logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
                     
         # HINT: in current design, we can only ensure that all [existed/queried] items are processed
-        failures_file = output_dir / "failures.txt"
+        failures_file = output_dir / f"failures_{shard_id}.txt"
         if failures_file.exists(): failures_file.unlink()
         if failures:
             with open(failures_file, "w") as f:
@@ -336,6 +339,12 @@ class DataEngine:
             logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
         logger.info(f"All tasks completed. Total queried: {hit_count}/{len(query_set)}")
         
+    
+    
+    
+    
+    
+    
     
     def query_rcsb(
         self,

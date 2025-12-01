@@ -15,8 +15,9 @@ from pathlib import Path
 
 DataEngine().query_afdb(
     output_dir=Path("/GenSIvePFS/users/lutianyu/lf/afdb"),
-    max_concurrent=1000,
+    max_concurrent=100,
     query_path=Path("/GenSIvePFS/users/lutianyu/lf/clusters-by-entity-40.txt"),
+    shard_id=0,
 )
 
 # DataEngine().process_pickle2parquet(
