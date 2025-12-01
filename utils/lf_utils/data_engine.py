@@ -292,7 +292,8 @@ class DataEngine:
         
         # submit cif2pickle tasks iteratively
         hit_count, futures, failures = 0, [], []
-        for i, it in enumerate(self._scan_afdb(query_set, rawfile_dir, shard_id=shard_id)):
+        for i, it in enumerate(self._scan_afdb(query_set, rawfile_dir, shard_id)):
+            logger.info(f"Submitting task [{i+1}/{len(query_set)}]: {it.name} ...")
             uniref_accession_extended = it.name.removesuffix('.gz').removesuffix('.cif')
             futures.append(task_cif2pickle.remote(it, pickle_dir / f"{uniref_accession_extended}.pkl"))
             
