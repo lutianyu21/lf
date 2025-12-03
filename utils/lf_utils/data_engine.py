@@ -61,6 +61,7 @@ class GPUWorker:
         self.tokenizer_name = tokenizer_name
         self.processor = None
 
+    @torch.no_grad()
     def fn(self, batch: List[OpenfoldProtein]):
         if self.processor is None:
             protein_tokenizer = {
@@ -102,31 +103,29 @@ class GPUWorker:
 @ray.remote
 class PickleWorker:
     # n producers reading pickles from disk
-    def __init__(self, pickle_dir: str, batch_size: int, group_size: int, group_id: int): 
+    def __init__(self, pickle_dir: str, bq: pd.DataFrame, bsz: int): 
         self.pickle_dir = Path(pickle_dir)
-        self.group_size = group_size
-        self.group_id = group_id
-        self.batch_size = batch_size
-
+        self.bq = bq
+        self.bsz = bsz
+    
     def fn(self, out_queue: Queue):
         batch = []
-        count = 0 
-        with os.scandir(self.pickle_dir) as it:
-            for entry in it:
-                if not entry.is_file() or not entry.name.endswith(".pkl"): continue
-                count += 1
-                if count % self.group_size != self.group_id: continue
-                try:
-                    with open(entry.path, "rb") as f:
-                        obj = pickle.load(f)
-                    batch.append(obj)
-                    if len(batch) >= self.batch_size:
-                        out_queue.put(batch)
-                        batch = []
-                except Exception as e:
-                    logger.error(f"Failed to read {entry.path}: {e}")
+        # instead of scanning all files(unstable order), 
+        # we scan bq.parquet to ensure deterministic processing
+        for _, row in self.bq.iterrows():
+            pickle_file = self.pickle_dir / row['picklePath']
+            try:
+                with open(pickle_file, "rb") as f:
+                    obj = pickle.load(f)
+                batch.append(obj)
+                if len(batch) >= self.bsz:
+                    out_queue.put(batch)
+                    batch = []
+            except Exception as e:
+                logger.error(f"Failed to read {pickle_file}: {e}")
+                
         if batch: out_queue.put(batch)
-        out_queue.put(None)
+        out_queue.put(None)  # signal done
 
 
 
@@ -172,7 +171,15 @@ def extract2target(
             src_path = iter.parent / (uniref_accession + ''.join(iter.suffixes))
             dst_path = output_dir  / (uniref_accession_extended + ''.join(iter.suffixes))
             if dst_path.exists():
-                return ("skipped", uniref_accession_extended)
+                # FIX bug, re-pickle even if cif exists
+                if pickle_dir is not None:
+                    protein = OpenfoldProtein.from_file(iter)
+                    pickle_path = pickle_dir / (protein.entry + ".pkl")
+                    with pickle_path.open("wb") as f:
+                        pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
+                    return ("success", uniref_accession_extended)
+                else:
+                    return ("skipped", uniref_accession_extended)
             else:
                 shutil.copyfile(src_path, dst_path)
                 if pickle_dir is not None:
@@ -237,7 +244,7 @@ class DataEngine:
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_02"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_03"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_04"),
-            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest"),
+            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest/part_05"),
             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_06"),
         ]
         
@@ -418,43 +425,72 @@ class DataEngine:
             logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
         logger.info(f"All tasks completed. Total queried: {hit_count}/{len(query_set)}")
         
-        
+    
+    
+    
+    
+    
     ### process functions ###
     def process_pickle2parquet(
         self,
-        pickle_dir: Path,
-        output_dir: Path,
-        bsz: int,
-        num_consumers: int,
-        num_producers: int,
-        tokenizer_name: str = "dist",       # dplm / dist tokenizer
-        dataset_name: str = "unicluster",   # will be mapped to feature['split]
+        bq_path:        Path,
+        pickle_dir:     Path,
+        parquet_dir:    Path,
+        bsz:            int,
+        num_consumers:  int,
+        num_producers:  int,
+        tokenizer_name: str = "dist",           # dplm / dist tokenizer
+        dataset_name:   str = "unicluster",     # will be mapped to feature['split]
     ):
-        self._seed_everything(2025)
-        output_dir = output_dir / 'parquet'
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # should prepare following files:
+        # - pickle_dir/*.pkl
+        # - bq.parquet
+        # generated:
+        # - parquet_dir/parquet/shard_*.parquet
         
-        queue = Queue(100)
-        consumers = [GPUWorker.remote(dataset_name, tokenizer_name) for _ in range(num_consumers)]
-        producers = [PickleWorker.remote(str(pickle_dir), bsz, num_producers, i) for i in range(num_producers)]
+        parquet_dir = parquet_dir / 'parquet'
+        parquet_dir.mkdir(parents=True, exist_ok=True)
+        
+        # load and split bq.parquet, each producer will handle a subset
+        logger.info(f"Loading bigtable from {bq_path} ...")
+        bq_df = pd.read_parquet(bq_path)
+        num_items_total = len(bq_df)
+        num_items_producer = (num_items_total + num_producers - 1) // num_producers
+        
+        # n producer x m consumer pattern
+        logger.info(f"Starting {num_producers} producers x {num_consumers} consumers ...")
+        queue = Queue(1000)
+        producers = [
+            PickleWorker.remote(str(pickle_dir), bq_df[
+                i * num_items_producer : min((i + 1) * num_items_producer, len(bq_df))
+            ], bsz) for i in range(num_producers)
+        ]
         num_consumers_max = num_consumers * 2
         num_producers_done = 0
+        consumers = [
+            GPUWorker.remote(dataset_name, tokenizer_name) for _ in range(num_consumers)
+        ]
+        
+        # starting produsers first
+        for w in producers:
+            w.fn.remote(queue)  # type: ignore
+        
+        # consumption loop
         time_start = time.time()
         writer_checkpoint_frequency = 100000
         writer_checkpoint_buffer = 0
         writer_checkpoint_cnt = 0
-        
-        logger.info(f"Starting {num_producers} producers and {num_consumers} consumers ...")
-        for w in producers: w.fn.remote(queue)  # type: ignore
         parquet_writer, bid, pending_refs = None, 0, []
         while True:
+            
+            # loop until all producers are done
             batch = queue.get()
             if batch is None:
                 num_producers_done += 1
                 if num_producers_done >= num_producers: break
                 continue
             
-            # submit to a consumer
+            # submit to a consumer, round-robin
             current_consumer = consumers[bid % num_consumers]
             ref = current_consumer.fn.remote(batch)  # type: ignore
             pending_refs.append(ref)
@@ -471,7 +507,7 @@ class DataEngine:
                 table = pyarrow.Table.from_pylist(result)
                 if parquet_writer is None:
                     parquet_writer = pyarrow.parquet.ParquetWriter( # type: ignore
-                        str(output_dir / f"shard{writer_checkpoint_cnt}.parquet"),
+                        str(parquet_dir / f"shard_{writer_checkpoint_cnt}.parquet"),
                         table.schema,
                         compression="snappy"
                     )
@@ -481,7 +517,7 @@ class DataEngine:
                 # save checkpoint
                 if writer_checkpoint_buffer >= writer_checkpoint_frequency:
                     parquet_writer.close()
-                    logger.info(f"[shard{writer_checkpoint_cnt}] finished with {writer_checkpoint_buffer} entries.")
+                    logger.info(f"[shard_{writer_checkpoint_cnt}] finished with {writer_checkpoint_buffer} entries.")
                     writer_checkpoint_buffer = 0
                     writer_checkpoint_cnt += 1
                     parquet_writer = None
@@ -498,7 +534,7 @@ class DataEngine:
             table = pyarrow.Table.from_pylist(result)
             if parquet_writer is None:
                 parquet_writer = pyarrow.parquet.ParquetWriter( # type: ignore
-                    str(output_dir / f"shard{writer_checkpoint_cnt}.parquet"),
+                    str(parquet_dir / f"shard_{writer_checkpoint_cnt}.parquet"),
                     table.schema,
                     compression="snappy"
                 )
@@ -507,11 +543,11 @@ class DataEngine:
             
             if writer_checkpoint_buffer >= writer_checkpoint_frequency:
                 parquet_writer.close()
-                logger.info(f"[shard{writer_checkpoint_cnt}] finished with {writer_checkpoint_buffer} entries.")
+                logger.info(f"[shard_{writer_checkpoint_cnt}] finished with {writer_checkpoint_buffer} entries.")
                 writer_checkpoint_buffer = 0
                 writer_checkpoint_cnt += 1
                 parquet_writer = None
         
         if parquet_writer is not None:
             parquet_writer.close()
-        logger.info(f"All batches are processed and saved to {output_dir}")
+        logger.info(f"All batches are processed and saved to {parquet_dir}")

@@ -13,19 +13,22 @@ from pathlib import Path
 # )
 
 
-DataEngine().query_afdb(
-    output_dir=Path("/GenSIvePFS/users/lutianyu/lf/afdb"),
-    max_concurrent=2000,
-    query_path=Path("/GenSIvePFS/users/lutianyu/lf/clusters-by-entity-40.txt"),
-    shard_id=0,
+# DataEngine().query_afdb(
+#     output_dir=Path("/GenSIvePFS/users/lutianyu/lf/afdb"),
+#     max_concurrent=2000,
+#     query_path=Path("/GenSIvePFS/users/lutianyu/lf/clusters-by-entity-40.txt"),
+#     shard_id=0,
+# )
+
+
+DataEngine().process_pickle2parquet(
+    bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster_40/bq.parquet"),
+    pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster_40/pickle"),
+    parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster_40"),
+    bsz=1000,
+    num_consumers=8,
+    num_producers=10,
+    tokenizer_name="dist",
+    dataset_name="unicluster",
 )
 
-# DataEngine().process_pickle2parquet(
-#     pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster_40/pickle"),
-#     output_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster_40"),
-#     bsz=16,
-#     num_consumers=4,
-#     num_producers=4,
-#     tokenizer_name="dist",
-#     dataset_name="unicluster",
-# )

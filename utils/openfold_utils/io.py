@@ -194,11 +194,13 @@ def _gemmi_parser(
     elif sub_by_auth_aym_id:
         uniref_accession = uniref_accesion_extended.split('@')[0]
         auth_aym_id = uniref_accesion_extended.split('@')[1]
-        p = p.parent / (uniref_accession + ''.join(p.suffixes))    
+        if not p.exists():
+            p = p.parent / (uniref_accession + ''.join(p.suffixes))    
     elif sub_by_entity_id:
         uniref_accession = uniref_accesion_extended.split('%')[0]
         entity_id = uniref_accesion_extended.split('%')[1]
-        p = p.parent / (uniref_accession + ''.join(p.suffixes))
+        if not p.exists():
+            p = p.parent / (uniref_accession + ''.join(p.suffixes))
         
     # load structure
     try:
@@ -270,11 +272,19 @@ def _gemmi_parser(
         for chain_id in chain2feature:
             if chain_id == auth_aym_id:
                 return chain2feature[chain_id]
+        warnings.warn(f'No chain with auth_aym_id={auth_aym_id} found in {p}. Return the whole protein instead.')
+        
     elif sub_by_entity_id:
         # find the first chain with the entity_id
         for chain_id in chain2feature:
-            if torch.all(chain2feature[chain_id]['residue_entity_index'] == int(entity_id)):
-                return chain2feature[chain_id]
+            
+            if torch.any(chain2feature[chain_id]['residue_entity_index'] == int(entity_id)):
+                # extract only residues with the entity_id
+                return {
+                    k: v[chain2feature[chain_id]['residue_entity_index'] == int(entity_id)]
+                    for k, v in chain2feature[chain_id].items()
+                }
+        warnings.warn(f'No chain with entity_id={entity_id} found in {p}. Return the whole protein instead.')
     
     feature_names = list(next(iter(chain2feature.values())).keys())
     return {

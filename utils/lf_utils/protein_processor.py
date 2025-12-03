@@ -162,7 +162,7 @@ class ProteinProcessor(ProcessorMixin):
     @staticmethod
     def compute_kbastch_align(structure1: OpenfoldProtein, structure2: OpenfoldProtein) -> Tuple[float, float]:
         raise NotImplementedError()
-
+    
     def preprocess_dataset(self, dataset_name: str, batch: List[OpenfoldProtein], verbose: bool = True) -> List[dict]:
         batch = [b.to(self.device) for b in batch]
         out = self.struct_tokenizer(batch)
