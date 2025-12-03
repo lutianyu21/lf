@@ -1,4 +1,3 @@
-from csv import writer
 import random
 import time
 from typing import Iterator, Optional, Tuple, Any, List
@@ -465,7 +464,7 @@ class DataEngine:
                 i * num_items_producer : min((i + 1) * num_items_producer, len(bq_df))
             ], bsz) for i in range(num_producers)
         ]
-        num_consumers_max = num_consumers * 2
+        num_consumers_max = num_consumers - 1
         num_producers_done = 0
         consumers = [
             GPUWorker.remote(dataset_name, tokenizer_name) for _ in range(num_consumers)
