@@ -55,6 +55,7 @@ from utils.lf_utils import (
     UnbatchedModalityLogitsProcessorBase,
     DATASET_SPLIT, DATASET_RAW_ROOT,
     PackingFoldingTrainer,
+    dataset,
 )
 
 # log color whenrank=0 & silent when rank>0
@@ -103,13 +104,21 @@ def sft(config: DictConfig):
         return IterableDataset.from_generator(gen, features=ds.features)
     
     dataset_eval = load_dataset('parquet', streaming=False, split='train', data_files=config_dataset.eval)
+    # for quick evaluation, resitrict to 1000 samples of each eval dataset
+    dataset_eval_small = []
+    for eval_ds in config_dataset.eval:
+        ds = load_dataset('parquet', streaming=False, split='train', data_files=eval_ds)
+        ds = ds.select(range(min(1000, len(ds)))) # type: ignore
+        dataset_eval_small.append(ds)
+    dataset_eval = datasets.concatenate_datasets(dataset_eval_small)
+    
     features = Features({
-        "split":        Value("string"),
-        "pdb_name":     Value("string"),
-        "plddt":        Value("float32"),
-        "seq_length":   Value("int64"),
-        "struct_length": Value("int64"),
-        "text":         Value("string"),
+        "split":            Value("string"),
+        "pdb_name":         Value("string"),
+        "plddt":            Value("float32"),
+        "text":             Value("string"),
+        "seq_length":       Value("int64"),
+        "struct_length":    Value("int64"),
     })
     dataset_train = interleave_datasets(
         datasets=[
@@ -188,9 +197,7 @@ def sft(config: DictConfig):
         eval_collator=ExtraColumnCollator(),
         compute_metrics=PackingFoldingTrainer.compute_metrics,
     )
-    # sft_trainer.train() # type: ignore
-    sft_trainer.evaluate() # type: ignore
-    
+    sft_trainer.train() # type: ignore
     
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Finished SFT training ...')

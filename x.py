@@ -26,7 +26,7 @@ DataEngine().process_pickle2parquet(
     pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster_40/pickle"),
     parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster_40"),
     bsz=1000,
-    num_consumers=8,
+    num_consumers=2,
     num_producers=10,
     tokenizer_name="dist",
     dataset_name="unicluster",

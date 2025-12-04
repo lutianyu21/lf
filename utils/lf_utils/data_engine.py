@@ -116,10 +116,13 @@ class PickleWorker:
             try:
                 with open(pickle_file, "rb") as f:
                     obj = pickle.load(f)
-                batch.append(obj)
-                if len(batch) >= self.bsz:
-                    out_queue.put(batch)
-                    batch = []
+                if len(obj) > 1024:
+                    continue
+                else:
+                    batch.append(obj)
+                    if len(batch) >= self.bsz:
+                        out_queue.put(batch)
+                        batch = []
             except Exception as e:
                 logger.error(f"Failed to read {pickle_file}: {e}")
                 

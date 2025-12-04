@@ -1,10 +1,10 @@
 defaults:
   - _self_
-  - dataset: folding+sequence
-  - lm: hk
+  - dataset: 2-2-1
+  - lm: qwen3
   - trainer: sft
 
-name: qwen3@rcsb+swissprot@eval_folding+sequence
+name: qwen3@2-2-1
 
 hydra:
   output_subdir: null
