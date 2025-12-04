@@ -132,6 +132,7 @@ echo "================================"
 
 # Check and create container if not exists on each node(requires few resources, nxpxc = nx1x1):
 echo "=== Checking and creating container [$CONTAINER_NAME] on all nodes ==="
+export ENROOT_MOUNT_HOME=no # Prevent enroot from mounting home directory automatically
 srun --ntasks=$SLURM_NNODES --ntasks-per-node=1 --cpus-per-task=1 bash -c "
 if ! enroot list | grep -q '^$CONTAINER_NAME\$'; then
     echo \"[ \$(hostname) ] Container '$CONTAINER_NAME' not found. Creating...\"
