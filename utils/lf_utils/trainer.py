@@ -9,7 +9,6 @@ import logging
 import colorlog
 
 import numpy as np
-from sympy import sequence, use
 import torch
 import torch.utils
 import torch.utils.data
@@ -175,10 +174,13 @@ class PackingFoldingTrainer(SFTTrainer):
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
             
+            # bascially we do not truncate inputs during evaluation
+            # special handling for 'uniref50' long sequences
+            is_long_sequence = element['split'] in ['uniref50']
             outputs = tokenizer(
                 element["text"] if not use_formatting_func else formatting_func(element),
                 add_special_tokens=add_special_tokens,
-                truncation='prompt' not in element.keys(), # True for training; False for eval
+                truncation=is_long_sequence,
                 padding=False,
                 max_length=max_seq_length,
                 return_overflowing_tokens=False,
@@ -193,20 +195,7 @@ class PackingFoldingTrainer(SFTTrainer):
                 else:
                     self._dataset_sanity_checked = True
             # keep any other columns besides signature columns +++
-            if 'prompt' in element.keys():
-                outputs_prompt = tokenizer(
-                    element["prompt"] if not use_formatting_func else formatting_func(element),
-                    add_special_tokens=add_special_tokens,
-                    truncation=False,
-                    padding=False,
-                    max_length=max_seq_length,
-                    return_overflowing_tokens=False,
-                    return_length=False,
-                )
-                outputs['labels'] = outputs["input_ids"]
-                outputs['input_ids'] = outputs_prompt["input_ids"] # truncated input_ids
-            else:
-                outputs['labels'] = outputs["input_ids"]
+            outputs['labels'] = outputs["input_ids"]
                 
             return {
                 "input_ids":        outputs["input_ids"],
@@ -244,11 +233,24 @@ class PackingFoldingTrainer(SFTTrainer):
     @property
     def dummy_metrics(self):
         return dict(
+            # unique task id
             tid=-1,
+            # evaluation
             sequence_loss=1e5,
             sequence_acc=0.0,
             structure_loss=1e5,
             structure_acc=0.0,
+            # support generation metrics
+            split=-1,
+            tm_vq=0.0,
+            tm_ar=0.0,
+            acc_gen=0.0,
+            acc_eps=0.0,
+            bleu_gen=0.0,
+            bleu_eps=0.0,
+            loss_eps=1e5,
+            rmsd_l_vq=1e5,
+            rmsd_l_ar=1e5,
         )
     
     @torch.no_grad()
@@ -260,7 +262,7 @@ class PackingFoldingTrainer(SFTTrainer):
         ignore_keys: Optional[List[str]] = None
     ):
         assert inputs['labels'].shape[0] == 1, "pLM evaluation only supports batch size = 1."
-        assert inputs['split'][0] in ['uniref50'], f"pLM evaluation only supports uniref50 dataset, but got {inputs['split']}."
+        assert inputs['split'][0] in ['p/uniref50'], f"pLM evaluation only supports uniref50 dataset, but got {inputs['split']}."
         
         # evaluation for protein sequence understanding: 
         # eval/plm/sequence_loss + eval/plm/sequence_acc
@@ -308,7 +310,7 @@ Sequence Acc:     {sequence_acc:.4f}
         ignore_keys: Optional[List[str]] = None
     ):
         assert inputs['labels'].shape[0] == 1, "sLM evaluation only supports batch size = 1."
-        assert inputs['split'][0] in ['unicluster40'], f"sLM evaluation only supports unicluster40 dataset, but got {inputs['split']}."
+        assert inputs['split'][0] in ['s/unicluster40'], f"sLM evaluation only supports unicluster40 dataset, but got {inputs['split']}."
         
         # evaluation for protein structure understanding: 
         # eval/slm/structure_loss + eval/slm/structure_acc
@@ -356,6 +358,7 @@ Structure Acc:    {structure_acc:.4f}
         ignore_keys: Optional[List[str]] = None
     ):
         assert inputs['labels'].shape[0] == 1, "p2s evaluation only supports batch size = 1."
+        assert inputs['split'][0] in ['p2s/unicluster40'], f"p2s evaluation only supports unicluster40 dataset, but got {inputs['split']}."
         
         # evaluation for protein sequence-to-structure:
         # eval/p2s/{seq_loss, structure_loss} + eval/p2s/{seq_acc, structure_acc}
@@ -422,6 +425,113 @@ Structure Acc:    {structure_acc:.4f}
         model.train()
         return (output.loss, {k:torch.tensor(v).to(model.device) for k, v in metrics.items()}, inputs['input_ids'])
     
+    
+    @torch.no_grad()
+    def _prediction_step_folding(
+        self,
+        model: PreTrainedModel,
+        inputs: Dict[str, Any],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None
+    ):
+        assert inputs['labels'].shape[0] == 1, "folding evaluation only supports batch size = 1."
+        
+        # inputs_ids:   <seq>...</seq>
+        # labels:       <seq>...</seq><struct>....</struct>
+        
+        model.eval()
+        # find the first </seq> token, split into sequence / structure part
+        constant_helper = self.processor.constant_helper()
+        prompt_length = torch.sum(
+            (inputs['labels'][0] == constant_helper['eoseq_token_id']).cumsum(dim=0) == 0
+        ).int().item() + 1 # include both <seq> & </seq> token itself
+        answer_length = inputs['labels'].shape[1] - prompt_length
+        
+        split, pdb_name, device = inputs['split'][0], inputs['pdb_name'][0], inputs['input_ids'].device
+        root, format = DATASET_RAW_ROOT[split][0], DATASET_RAW_ROOT[split][1]
+        
+        # run generation to get structure prediction
+        generation_config = GenerationConfig(
+            use_cache=True,
+            eos_token_id=self.processor.tokenizer.eos_token_id,
+            pad_token_id=self.processor.tokenizer.pad_token_id,
+            do_sample=False,
+            max_new_tokens=12*1024,
+        )
+        logits_processor = UnbatchedModalityLogitsProcessorBase(
+            **self.processor.constant_helper(),
+            processor=self.processor,
+            templates=[('struct', inputs['struct_length'][0].item())]
+        )
+        generation_token_ids: torch.Tensor = model.generate(
+            input_ids=inputs["labels"][:, :prompt_length],
+            attention_mask=inputs["attention_mask"],
+            generation_config=generation_config,
+            logits_processor=[logits_processor],
+        ) # type: ignore
+        
+        target_token_ids = inputs['labels'][0, prompt_length :]             # <struct>....</struct>
+        generation_token_ids = generation_token_ids[0, prompt_length : -1]  # <struct>....</struct> (remove <endoftext>)
+        generation_acc = (generation_token_ids == target_token_ids).float().mean().item()
+        generation_bleu = sacrebleu.corpus_bleu(
+            [" ".join(map(str, generation_token_ids.cpu().tolist()))],
+            [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
+        ).score
+        p_nature = OpenfoldProtein.from_file(Path(root)/f"{pdb_name}{format}").to(device)
+        p_vq = self.processor.multimodal_decode(target_token_ids, ref=p_nature)['entity'][0].to(device)
+        p_ar = self.processor.multimodal_decode(generation_token_ids, ref=p_nature)['entity'][0].to(device)
+        tm_vq, rmsd_l_vq, rmsd_g_vq = self.processor.compute_tm_align(p_vq, p_nature, ref=p_nature)
+        tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
+        
+        # exposure pipeline
+        exposure = model(
+            input_ids=inputs['labels'],                                     # <seq>....</seq><struct>....</struct>
+            attention_mask=inputs['attention_mask'],       
+        )                                                                   # ....</seq><struct>....</struct><endoftext>
+        exposure_logits: torch.Tensor = exposure.logits[0, prompt_length - 1 : -1, :] # type: ignore
+        exposure_token_ids = exposure_logits.argmax(dim=-1)                 # <struct>....</struct>
+        exposure_bleu = sacrebleu.corpus_bleu(
+            [" ".join(map(str, exposure_token_ids.cpu().tolist()))],
+            [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
+        ).score
+        exposure_loss = torch.nn.functional.nll_loss(
+            input=torch.log_softmax(exposure_logits, dim=-1),
+            target=target_token_ids,
+            reduction='mean'
+        )
+        exposure_acc = (exposure_token_ids == target_token_ids).float().mean().item()
+        
+        metrics = dict(
+            tid=3,
+            # meta
+            split=DATASET_SPLIT[split],
+            tm_ar=tm_ar,
+            rmsd_l_ar=rmsd_l_ar,
+            acc_gen=generation_acc,
+            acc_eps=exposure_acc,
+            bleu_gen=generation_bleu,
+            bleu_eps=exposure_bleu,
+            # exposure pipeline
+            loss_eps=exposure_loss,
+        )
+        metrics = self.dummy_metrics | metrics
+        
+        # format a logging message here
+        logger.info(f"""Evaluated [{pdb_name}] from [{split}]:
+Target Results:     {self.processor.tokenizer.decode(target_token_ids.cpu().tolist())}
+Exposure Results:   {self.processor.tokenizer.decode(exposure_token_ids.cpu().tolist())}
+Generation Results: {self.processor.tokenizer.decode(generation_token_ids.cpu().tolist())}
+Exposure Loss:  {exposure_loss:.4f}
+Exposure Acc:   {exposure_acc:.4f}, BLEU: {exposure_bleu:.4f}
+Generation Acc: {generation_acc:.4f}, BLEU: {generation_bleu:.4f}
+VQ v.s. Nature: TM-score = {tm_vq:.4f}, RMSD_L = {rmsd_l_vq:.4f}, RMSD_G = {rmsd_g_vq:.4f}
+AR v.s. Nature: TM-score = {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd_g_ar:.4f}
+""")
+        model.train()
+        return (exposure_loss, {k:torch.tensor(v).to(device) for k, v in metrics.items()}, inputs['input_ids'])
+    
+    
+    @torch.no_grad()
     def prediction_step(
         self,
         model: PreTrainedModel,
@@ -431,14 +541,15 @@ Structure Acc:    {structure_acc:.4f}
     ):
         split = inputs['split'][0]
         logger.warning(split)
-        if split in ['uniref50']:
+        if split in ['p/uniref50']:
             return self._prediction_step_plm(model, inputs, prediction_loss_only, ignore_keys)
-        elif split in ['unicluster40']:
+        elif split in ['s/unicluster40']:
             return self._prediction_step_slm(model, inputs, prediction_loss_only, ignore_keys)
-        else:
+        elif split in ['p2s/unicluster40']:
             return self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
+        else:
+            return self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
     
-        
 
     @classmethod
     def compute_metrics(cls, eval_pred: EvalPrediction):
@@ -461,4 +572,19 @@ Structure Acc:    {structure_acc:.4f}
                 metrics['p2s/sequence_acc']   = group['sequence_acc'].mean()
                 metrics['p2s/structure_loss'] = group['structure_loss'].mean()
                 metrics['p2s/structure_acc']  = group['structure_acc'].mean()
+            elif tid == 3:
+                # another group by `split` field
+                for split, split_group in group.groupby('split'):
+                    split_name = list(DATASET_SPLIT.keys())[int(split)] # type: ignore
+                    prefix = f"folding/{split_name}/"
+                    metrics[prefix + 'tm_ar']     = split_group['tm_ar'].mean()
+                    metrics[prefix + 'rmsd_l_ar'] = split_group['rmsd_l_ar'].mean()
+                    metrics[prefix + 'acc_gen']   = split_group['acc_gen'].mean()
+                    metrics[prefix + 'acc_eps']   = split_group['acc_eps'].mean()
+                    metrics[prefix + 'bleu_gen']  = split_group['bleu_gen'].mean()
+                    metrics[prefix + 'bleu_eps']  = split_group['bleu_eps'].mean()
+                    metrics[prefix + 'loss_eps']  = split_group['loss_eps'].mean()
+            else:
+                raise NotImplementedError()
         return metrics
+    

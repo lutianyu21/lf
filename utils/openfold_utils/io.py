@@ -253,7 +253,11 @@ def _gemmi_parser(
             feature['residue_aatype'].append(torch.tensor(restype_idx, dtype=dtype_template['residue_aatype']))
             feature['residue_index'].append(torch.tensor(residue.seqid.num, dtype=dtype_template['residue_index']))
             feature['residue_chain_index'].append(torch.tensor(pdb_chain_order[chain_name], dtype=dtype_template['residue_chain_index']))
-            feature['residue_entity_index'].append(torch.tensor(eval(residue.entity_id), dtype=dtype_template['residue_entity_index']))
+            if '.pdb' in p.suffixes:
+                # NOTE than pdb format does not have entity_id info
+                feature['residue_entity_index'].append(torch.tensor(0, dtype=dtype_template['residue_entity_index']))
+            else:
+                feature['residue_entity_index'].append(torch.tensor(eval(residue.entity_id), dtype=dtype_template['residue_entity_index']))
         
         if feature['residue_atom37_coord'] == []:
             continue

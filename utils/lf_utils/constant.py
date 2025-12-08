@@ -4,24 +4,20 @@ import pdb
 
 
 DATASET_SPLIT = {
-    # for evaluation
     'dev':              0,
     'cameo2022':        1,
     'casp15':           2,
     'casp16':           3,
-    # for training
     'rcsb':             4,
     'afdb_swissprot':   5,
-    'afdb_plddt90':     6,
 }
 
 
 DATASET_RAW_ROOT = {
-    'dev':              ('/GenSIvePFS/users/lutianyu/lf/data/raw/rcsb',                 '.cif'),
-    'cameo2022':        ('/GenSIvePFS/users/lutianyu/lf/data/raw/rcsb',                 '.cif'),
-    'casp15':           ('/GenSIvePFS/users/lutianyu/lf/data/raw/casp/casp15',          '.pdb'),
-    'casp16':           ('/GenSIvePFS/users/lutianyu/lf/data/raw/casp/casp16',          '.pdb'),
-    'rcsb':             ('/GenSIvePFS/users/lutianyu/lf/data/raw/rcsb',                 '.cif'),
-    'afdb_swissprot':   ('/GenSIvePFS/users/lutianyu/lf/data/raw/afdb_swissprot',       '.cif.gz'),
-    'afdb_plddt90':     ('/GenSIvePFS/users/lutianyu/lf/data/raw/afdb_plddt90',         '.cif.gz'),
+    'dev':              ('/GenSIvePFS/users/lutianyu/lf/data/rcsb/raw',                 '.cif'),
+    'cameo2022':        ('/GenSIvePFS/users/lutianyu/lf/data/rcsb/raw',                 '.cif'),
+    'casp15':           ('/GenSIvePFS/users/lutianyu/lf/data/casp15/raw',               '.pdb'),
+    'casp16':           ('/GenSIvePFS/users/lutianyu/lf/data/casp16/raw',               '.pdb'),
+    'rcsb':             ('/GenSIvePFS/users/lutianyu/lf/data/rcsb/raw',                 '.cif'),
+    'afdb_swissprot':   ('/GenSIvePFS/users/lutianyu/lf/data/swissprot_v4/raw',         '.cif.gz'),
 }

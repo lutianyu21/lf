@@ -34,3 +34,4 @@ dataset_text_field: text
 per_device_eval_batch_size: 1
 eval_strategy: steps
 eval_steps: 100
+eval_on_start: True

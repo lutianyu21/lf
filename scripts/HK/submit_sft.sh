@@ -6,7 +6,7 @@
 #SBATCH --job-name=lf-ar                # job name
 #SBATCH --output=output.log             # stdout
 #SBATCH --error=error.log               # stderr
-#SBATCH --nodes=8                       # nodes
+#SBATCH --nodes=4                       # nodes
 #SBATCH --gres=gpu:8                    # GPUs/node
 #SBATCH --ntasks-per-node=1             # tasks/node
 #SBATCH --cpus-per-task=224             # CPUs/task
@@ -145,7 +145,7 @@ fi
 # Export variable in the container:
 numactl --cpunodebind=0 --membind=0 srun enroot start -r \
     --mount /home/projects/su4-protein/lutianyu:/GenSIvePFS/users/lutianyu \
-    --mount /home/projects/su4-protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/raw/rcsb \
+    --mount /home/projects/su4-protein/zhangzhe/protenix_data/mmcif:/GenSIvePFS/users/lutianyu/lf/data/rcsb/raw \
     -w $CONTAINER_NAME \
     -- /bin/bash -c "
     export SLURM_JOB_ID=$SLURM_JOB_ID; \
