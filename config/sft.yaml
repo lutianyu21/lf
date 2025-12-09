@@ -4,7 +4,7 @@ defaults:
   - lm: qwen3
   - trainer: sft
 
-name: qwen3@2-2-1@dplm2_ft
+name: qwen3@ablation@dplm2_ft
 
 hydra:
   output_subdir: null
