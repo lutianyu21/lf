@@ -1,14 +1,17 @@
 type: dist
 
 train:
-  - /GenSIvePFS/users/lutianyu/lf/dataset/sequence/uniref50/train.parquet
-  - /GenSIvePFS/users/lutianyu/lf/dataset/structure/unicluster40/train.parquet
-  - /GenSIvePFS/users/lutianyu/lf/dataset/folding/unicluster40/train.parquet
+  # - /GenSIvePFS/users/lutianyu/lf/dataset/sequence/uniref50/train.parquet
+  # - /GenSIvePFS/users/lutianyu/lf/dataset/structure/unicluster40/train.parquet
+  # - /GenSIvePFS/users/lutianyu/lf/dataset/folding/unicluster40/train.parquet
+  - /GenSIvePFS/users/lutianyu/lf/dataset/folding/dplm2/train.parquet
+
 
 weight:
-  - 0.4
-  - 0.4
-  - 0.2
+  # - 0.4
+  # - 0.4
+  # - 0.2
+  - 1.0
 
 eval:
   - /GenSIvePFS/users/lutianyu/lf/dataset/sequence/uniref50/eval.parquet

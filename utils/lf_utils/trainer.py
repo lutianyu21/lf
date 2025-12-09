@@ -1,4 +1,3 @@
-from cProfile import label
 import time
 from typing import Any, Dict, Optional, List, Text, Tuple, Union, cast
 import os
@@ -269,12 +268,8 @@ class PackingFoldingTrainer(SFTTrainer):
         start_time = time.time()
         model.eval()
         
-        output = model(
-            input_ids=inputs['labels'],
-            labels=inputs['labels'],
-            attention_mask=torch.ones_like(inputs['labels']),
-        )
-        
+        # modeling protein sequence understanding p(sequence)
+        output = model(input_ids=inputs['labels'], labels=inputs['labels'], attention_mask=torch.ones_like(inputs['labels']))
         target_token_ids = inputs['labels'][0]              # <seq>....</seq>
         eps_token_ids = output.logits[0].argmax(dim=-1)     # ....</seq><endoftext>
         sequence_loss = output.loss
@@ -317,12 +312,8 @@ Sequence Acc:     {sequence_acc:.4f}
         start_time = time.time()
         model.eval()
         
-        output = model(
-            input_ids=inputs['labels'],
-            labels=inputs['labels'],
-            attention_mask=torch.ones_like(inputs['labels']),
-        )
-        
+        # modeling protein structure understanding p(structure)
+        output = model(input_ids=inputs['labels'], labels=inputs['labels'], attention_mask=torch.ones_like(inputs['labels']))
         target_token_ids = inputs['labels'][0]              # <struct>....</struct>
         eps_token_ids = output.logits[0].argmax(dim=-1)     # ....</struct><endoftext>
         structure_loss = output.loss
@@ -364,6 +355,14 @@ Structure Acc:    {structure_acc:.4f}
         # eval/p2s/{seq_loss, structure_loss} + eval/p2s/{seq_acc, structure_acc}
         start_time = time.time()
         model.eval()
+        
+        
+        # modeling protein sequence-to-structure p(structure | sequence)
+        # we measures: 
+        # 1. whether condition is fully understood p(sequence)
+        # 2. whether structure is correctly predicted p(structure | sequence)
+        # 3. whether structure is correctly predicted   
+        
         
         output = model(
             input_ids=inputs['labels'],
@@ -545,7 +544,7 @@ AR v.s. Nature: TM-score = {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd
             return self._prediction_step_plm(model, inputs, prediction_loss_only, ignore_keys)
         elif split in ['s/unicluster40']:
             return self._prediction_step_slm(model, inputs, prediction_loss_only, ignore_keys)
-        elif split in ['p2s/unicluster40']:
+        elif split in ['p2s/unicluster40', 'p2s/afdb_swissprot', 'p2s/rcsb']:
             return self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
         else:
             return self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
