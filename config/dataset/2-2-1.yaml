@@ -4,7 +4,7 @@ train:
   # - /GenSIvePFS/users/lutianyu/lf/dataset/sequence/uniref50/train.parquet
   # - /GenSIvePFS/users/lutianyu/lf/dataset/structure/unicluster40/train.parquet
   # - /GenSIvePFS/users/lutianyu/lf/dataset/folding/unicluster40/train.parquet
-  - /GenSIvePFS/users/lutianyu/lf/dataset/folding/dplm2/train.parquet
+  - /GenSIvePFS/users/lutianyu/lf/dataset/folding/dplm2/train_small.parquet
 
 
 weight:

@@ -1,5 +1,3 @@
-from sre_parse import Tokenizer
-import tokenize
 from typing import Dict, List, Optional, Union, cast
 
 import warnings

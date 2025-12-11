@@ -22,13 +22,13 @@ from pathlib import Path
 
 
 DataEngine().process_pickle2parquet(
-    bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster_40/bq.parquet"),
-    pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster_40/pickle"),
-    parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster_40"),
-    bsz=1000,
+    bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster40/bq.parquet"),
+    pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster40/pickle"),
+    parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data"),
+    bsz=100,
     num_consumers=2,
     num_producers=10,
-    tokenizer_name="dist",
+    tokenizer_name="dplm",
     dataset_name="unicluster",
 )
 

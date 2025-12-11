@@ -234,24 +234,34 @@ class PackingFoldingTrainer(SFTTrainer):
         return dict(
             # unique task id
             tid=-1,
-            # evaluation
+            # plm evaluation
             sequence_loss=1e5,
             sequence_acc=0.0,
+            sequence_bleu=0.0,
+            # slm evaluation
             structure_loss=1e5,
             structure_acc=0.0,
-            # support generation metrics
-            split=-1,
-            tm_vq=0.0,
+            structure_bleu=0.0,
+            # p2s evaluation
+            folding_loss=1e5,
+            folding_acc=0.0,
+            folding_bleu=0.0,
+            # benchmark
+            benchmark=-1,
+            ar_loss=1e5,
+            ar_acc=0.0,
+            ar_bleu=0.0,
             tm_ar=0.0,
-            acc_gen=0.0,
-            acc_eps=0.0,
-            bleu_gen=0.0,
-            bleu_eps=0.0,
-            loss_eps=1e5,
-            rmsd_l_vq=1e5,
-            rmsd_l_ar=1e5,
+            tm_vq=0.0,
+            rmsd_ar=1e5,
+            rmsd_vq=1e5,        
         )
     
+    
+    # evaluation for protein sequence understanding: 
+    # - eval/plm/sequence_loss
+    # - eval/plm/sequence_acc
+    # - eval/plm/sequence_bleu
     @torch.no_grad()
     def _prediction_step_plm(
         self,
@@ -262,9 +272,6 @@ class PackingFoldingTrainer(SFTTrainer):
     ):
         assert inputs['labels'].shape[0] == 1, "pLM evaluation only supports batch size = 1."
         assert inputs['split'][0] in ['p/uniref50'], f"pLM evaluation only supports uniref50 dataset, but got {inputs['split']}."
-        
-        # evaluation for protein sequence understanding: 
-        # eval/plm/sequence_loss + eval/plm/sequence_acc
         start_time = time.time()
         model.eval()
         
@@ -274,28 +281,33 @@ class PackingFoldingTrainer(SFTTrainer):
         eps_token_ids = output.logits[0].argmax(dim=-1)     # ....</seq><endoftext>
         sequence_loss = output.loss
         sequence_acc = (eps_token_ids[:-1] == target_token_ids[1:]).float().mean().item() * 100.0
+        sequence_bleu = sacrebleu.corpus_bleu(
+            [" ".join(map(str, eps_token_ids.cpu().tolist()))],
+            [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
+        ).score
         
-        # logging metrics and the first 50 tokens
+        # logging metrics and the first 5 tokens
         logger.info(f"""
-Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:)
-//////
-Target Results:   {self.processor.tokenizer.decode(target_token_ids.cpu().tolist()[:10])}...
-Exposure Results: {self.processor.tokenizer.decode(eps_token_ids.cpu().tolist()[:10])}...
-//////
-Sequence Loss:    {sequence_loss.item():.4f}
-Sequence Acc:     {sequence_acc:.4f}
-//////
+////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
+Target   Sequence:          {self.processor.tokenizer.decode(target_token_ids.cpu().tolist()[:5])}...
+Exposure Sequence:          <seq>{self.processor.tokenizer.decode(eps_token_ids.cpu().tolist()[:4])}...
+Sequence Loss/Acc/Bleu:     {sequence_loss.item():.4f}/{sequence_acc:.4f}/{sequence_bleu:.4f}
 """)
         metrics = dict(
             tid=0,
             sequence_loss = sequence_loss.item(),
             sequence_acc = sequence_acc,
+            sequence_bleu = sequence_bleu,
         )
         metrics = self.dummy_metrics | metrics
         model.train()
         return (output.loss, {k:torch.tensor(v).to(model.device) for k, v in metrics.items()}, inputs['input_ids'])
     
     
+    # evaluation for protein structure understanding: 
+    # - eval/slm/structure_loss
+    # - eval/slm/structure_acc
+    # - eval/slm/structure_bleu
     @torch.no_grad()
     def _prediction_step_slm(
         self,
@@ -305,10 +317,6 @@ Sequence Acc:     {sequence_acc:.4f}
         ignore_keys: Optional[List[str]] = None
     ):
         assert inputs['labels'].shape[0] == 1, "sLM evaluation only supports batch size = 1."
-        assert inputs['split'][0] in ['s/unicluster40'], f"sLM evaluation only supports unicluster40 dataset, but got {inputs['split']}."
-        
-        # evaluation for protein structure understanding: 
-        # eval/slm/structure_loss + eval/slm/structure_acc
         start_time = time.time()
         model.eval()
         
@@ -318,28 +326,39 @@ Sequence Acc:     {sequence_acc:.4f}
         eps_token_ids = output.logits[0].argmax(dim=-1)     # ....</struct><endoftext>
         structure_loss = output.loss
         structure_acc = (eps_token_ids[:-1] == target_token_ids[1:]).float().mean().item() * 100.0
+        structure_bleu = sacrebleu.corpus_bleu(
+            [" ".join(map(str, eps_token_ids.cpu().tolist()))],
+            [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
+        ).score
         
-        # logging metrics and the first 100 tokens
+        # logging metrics and the first 5 tokens
         logger.info(f"""
-Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:)
-//////
-Target Results:   {self.processor.tokenizer.decode(target_token_ids.cpu().tolist()[:10])}...
-Exposure Results: {self.processor.tokenizer.decode(eps_token_ids.cpu().tolist()[:10])}...
-//////
-Structure Loss:   {structure_loss.item():.4f}
-Structure Acc:    {structure_acc:.4f}
-//////
+////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
+Target   Structure:         {self.processor.tokenizer.decode(target_token_ids.cpu().tolist()[:5])}...
+Exposure Structure:         <struct>{self.processor.tokenizer.decode(eps_token_ids.cpu().tolist()[:4])}...
+Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{structure_bleu:.4f}
 """)
         metrics = dict(
             tid=1,
             structure_loss = structure_loss.item(),
             structure_acc = structure_acc,
+            structure_bleu = structure_bleu,
         )
         metrics = self.dummy_metrics | metrics
         model.train()
         return (output.loss, {k:torch.tensor(v).to(model.device) for k, v in metrics.items()}, inputs['input_ids'])
     
     
+    # evaluation for protein sequence-to-structure:
+    # - eval/p2s/sequence_loss
+    # - eval/p2s/sequence_acc
+    # - eval/p2s/sequence_bleu
+    # - eval/p2s/folding_loss
+    # - eval/p2s/folding_acc
+    # - eval/p2s/folding_bleu
+    # - eval/p2s/structure_loss
+    # - eval/p2s/structure_acc
+    # - eval/p2s/structure_bleu
     @torch.no_grad()
     def _prediction_step_p2s(
         self,
@@ -349,82 +368,96 @@ Structure Acc:    {structure_acc:.4f}
         ignore_keys: Optional[List[str]] = None
     ):
         assert inputs['labels'].shape[0] == 1, "p2s evaluation only supports batch size = 1."
-        assert inputs['split'][0] in ['p2s/unicluster40'], f"p2s evaluation only supports unicluster40 dataset, but got {inputs['split']}."
-        
-        # evaluation for protein sequence-to-structure:
-        # eval/p2s/{seq_loss, structure_loss} + eval/p2s/{seq_acc, structure_acc}
         start_time = time.time()
         model.eval()
-        
         
         # modeling protein sequence-to-structure p(structure | sequence)
         # we measures: 
         # 1. whether condition is fully understood p(sequence)
         # 2. whether structure is correctly predicted p(structure | sequence)
-        # 3. whether structure is correctly predicted   
+        # 3. whether structure is fully conditioned on sequence p(structure | sequence) != p(structure)
         
-        
-        output = model(
-            input_ids=inputs['labels'],
-            attention_mask=inputs['attention_mask'],
-            labels=inputs['labels'],
-        )
+        output = model(input_ids=inputs['labels'], attention_mask=inputs['attention_mask'], labels=inputs['labels'])
+        copy_output_loss = output.loss
         
         # find the first </seq> token, split into sequence / structure part
         constant_helper = self.processor.constant_helper()
         prompt_length = torch.sum(
             (inputs['labels'][0] == constant_helper['eoseq_token_id']).cumsum(dim=0) == 0
-        ).int().item() + 1 # include both <seq> & </seq> token itself
+        ).int().item() + 1 # include both <seq> & </seq> token
         
         # for seq2seq task, we manually compute token-wise exposure loss
         labels: torch.Tensor = inputs['labels'][0]                  # <seq>....</seq><struct>....</struct>
         logits: torch.Tensor = output.logits[0] # type: ignore      # ....</seq><struct>....</struct>
         log_softmax_logits = torch.log_softmax(logits, dim=-1)      # ....</seq><struct>....</struct><endoftext>
         eps_token_ids = logits.argmax(dim=-1)                       # ....</seq><struct>....</struct><endoftext>
+        copy_labels = labels
+        copy_token_ids = eps_token_ids
         
-        sequence_loss = torch.nn.functional.nll_loss(
-            input=log_softmax_logits[0 : prompt_length - 1, :],
-            target=labels[1 : prompt_length],
-        )
-        sequence_acc = (
-            eps_token_ids[0 : prompt_length - 1] == labels[1 : prompt_length]
-        ).float().mean().item() * 100.0
+        # sequence condition
+        sequence_loss = torch.nn.functional.nll_loss(input=log_softmax_logits[0 : prompt_length - 1, :], target=labels[1 : prompt_length])
+        sequence_acc = (eps_token_ids[0 : prompt_length - 1] == labels[1 : prompt_length]).float().mean().item() * 100.0
+        sequence_bleu = sacrebleu.corpus_bleu(
+            [" ".join(map(str, eps_token_ids[0 : prompt_length - 1].cpu().tolist()))],
+            [[" ".join(map(str, labels[1 : prompt_length].cpu().tolist()))]]
+        ).score
         
+        # structure w/ sequence condition
+        folding_loss = torch.nn.functional.nll_loss(input=log_softmax_logits[prompt_length : -1, :], target=labels[prompt_length + 1 :])
+        folding_acc = (eps_token_ids[prompt_length : -1] == labels[prompt_length + 1 :]).float().mean().item() * 100.0
+        folding_bleu = sacrebleu.corpus_bleu(
+            [" ".join(map(str, eps_token_ids[prompt_length : -1].cpu().tolist()))],
+            [[" ".join(map(str, labels[prompt_length + 1 :].cpu().tolist()))]]
+        ).score
+        
+        # structure wo/ sequence condition
+        labels = inputs['labels'][:, prompt_length :] 
+        output = model(input_ids=labels, attention_mask=torch.ones_like(labels))
+        target_token_ids = labels[0]                                        # <struct>....</struct>
         structure_loss = torch.nn.functional.nll_loss(
-            input=log_softmax_logits[prompt_length : -1, :],
-            target=labels[prompt_length + 1 :],
+            input=torch.log_softmax(output.logits[0], dim=-1)[0 : -1, :],   # ....</struct>
+            target=target_token_ids[1 :]                                    # ....</struct>
         )
-        structure_acc = (
-            eps_token_ids[prompt_length : -1] == labels[prompt_length + 1 :]
-        ).float().mean().item() * 100.0
+        eps_token_ids = output.logits[0, :-1].argmax(dim=-1)                # ....</struct><endoftext>
+        structure_acc = (eps_token_ids == target_token_ids[1 :]).float().mean().item() * 100.0
+        structure_bleu = sacrebleu.corpus_bleu(
+            [" ".join(map(str, eps_token_ids.cpu().tolist()))],
+            [[" ".join(map(str, target_token_ids[1 :].cpu().tolist()))]]
+        ).score
         
-        # logging metrics and the first 10 tokens
+        
+        # logging metrics and the first 5 tokens
         logger.info(f"""
-Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:)
-//////
-Target Sequence Results:    {self.processor.tokenizer.decode(labels[:prompt_length].cpu().tolist()[:10])}...
-Target Structure Results:   {self.processor.tokenizer.decode(labels[prompt_length:].cpu().tolist()[:10])}...
-Exposure Sequence Results:  {self.processor.tokenizer.decode(eps_token_ids[:prompt_length-1].cpu().tolist()[:10])}...
-Exposure Structure Results: {self.processor.tokenizer.decode(eps_token_ids[prompt_length-1:].cpu().tolist()[:10])}...
-//////
-Sequence Loss:    {sequence_loss.item():.4f}
-Structure Loss:   {structure_loss.item():.4f}
-Sequence Acc:     {sequence_acc:.4f}
-Structure Acc:    {structure_acc:.4f}
-//////
+////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
+Target    Sequence:         {self.processor.tokenizer.decode(copy_labels[:prompt_length].cpu().tolist()[:5])}...
+Exposure  Sequence:         <seq>{self.processor.tokenizer.decode(copy_token_ids[:prompt_length - 1].cpu().tolist()[:4])}...
+Target    Structure:        {self.processor.tokenizer.decode(copy_labels[prompt_length:].cpu().tolist()[:5])}...
+Exposure  Structure:        <struct>{self.processor.tokenizer.decode(copy_token_ids[prompt_length:].cpu().tolist()[:4])}...
+Sequence  Loss/Acc/Bleu:    {sequence_loss.item():.4f}/{sequence_acc:.4f}/{sequence_bleu:.4f}
+Folding   Loss/Acc/Bleu:    {folding_loss.item():.4f}/{folding_acc:.4f}/{folding_bleu:.4f}
+Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{structure_bleu:.4f}
 """)
         metrics = dict(
             tid=2,
             sequence_loss = sequence_loss.item(),
             sequence_acc = sequence_acc,
+            sequence_bleu = sequence_bleu,
+            folding_loss = folding_loss.item(),
+            folding_acc = folding_acc,
+            folding_bleu = folding_bleu,
             structure_loss = structure_loss.item(),
             structure_acc = structure_acc,
+            structure_bleu = structure_bleu,
         )
         metrics = self.dummy_metrics | metrics
         model.train()
-        return (output.loss, {k:torch.tensor(v).to(model.device) for k, v in metrics.items()}, inputs['input_ids'])
+        return (copy_output_loss, {k:torch.tensor(v).to(model.device) for k, v in metrics.items()}, inputs['input_ids'])
     
     
+    # ! IMPORTANT !
+    # correlation between eval-loss & folding metrics is not clear yet
+    # in-domain loss >> out-of-domain loss >> ar generation loss >> ar generation bleu >> reconstruction
+    # --------------OOD------------------exposure--------------argmax---------------tokenizer--------------
     @torch.no_grad()
     def _prediction_step_folding(
         self,
@@ -434,100 +467,83 @@ Structure Acc:    {structure_acc:.4f}
         ignore_keys: Optional[List[str]] = None
     ):
         assert inputs['labels'].shape[0] == 1, "folding evaluation only supports batch size = 1."
-        
-        # inputs_ids:   <seq>...</seq>
-        # labels:       <seq>...</seq><struct>....</struct>
-        
+        start_time = time.time()
         model.eval()
+        
         # find the first </seq> token, split into sequence / structure part
         constant_helper = self.processor.constant_helper()
-        prompt_length = torch.sum(
-            (inputs['labels'][0] == constant_helper['eoseq_token_id']).cumsum(dim=0) == 0
-        ).int().item() + 1 # include both <seq> & </seq> token itself
+        prompt_length = torch.sum((inputs['labels'][0] == constant_helper['eoseq_token_id']).cumsum(dim=0) == 0).int().item() + 1 # include both <seq> & </seq> token itself
         answer_length = inputs['labels'].shape[1] - prompt_length
         
-        split, pdb_name, device = inputs['split'][0], inputs['pdb_name'][0], inputs['input_ids'].device
-        root, format = DATASET_RAW_ROOT[split][0], DATASET_RAW_ROOT[split][1]
-        
-        # run generation to get structure prediction
+        # exposure result can be obtained from p2s evaluation
+        # we only need to run autoregressive generation here
         generation_config = GenerationConfig(
             use_cache=True,
             eos_token_id=self.processor.tokenizer.eos_token_id,
             pad_token_id=self.processor.tokenizer.pad_token_id,
             do_sample=False,
             max_new_tokens=12*1024,
+            return_dict_in_generate=True,
+            output_scores=False,
+            output_logits=True,
         )
         logits_processor = UnbatchedModalityLogitsProcessorBase(
             **self.processor.constant_helper(),
             processor=self.processor,
             templates=[('struct', inputs['struct_length'][0].item())]
         )
-        generation_token_ids: torch.Tensor = model.generate(
+        ar = model.generate(
             input_ids=inputs["labels"][:, :prompt_length],
             attention_mask=inputs["attention_mask"],
             generation_config=generation_config,
             logits_processor=[logits_processor],
         ) # type: ignore
         
-        target_token_ids = inputs['labels'][0, prompt_length :]             # <struct>....</struct>
-        generation_token_ids = generation_token_ids[0, prompt_length : -1]  # <struct>....</struct> (remove <endoftext>)
-        generation_acc = (generation_token_ids == target_token_ids).float().mean().item()
-        generation_bleu = sacrebleu.corpus_bleu(
-            [" ".join(map(str, generation_token_ids.cpu().tolist()))],
+        ar_logits: torch.Tensor = torch.stack(ar.logits).permute(1, 0, 2)[0]            # <struct>....</struct><endoftext>
+        ar_loss = torch.nn.functional.nll_loss(
+            input=torch.log_softmax(ar_logits[: -1, :], dim=-1),                        # <struct>....</struct>
+            target=inputs['labels'][0, prompt_length :],                                # <struct>....</struct>
+            reduction='mean'
+        )
+        target_token_ids = inputs['labels'][0, prompt_length :]                         # <struct>....</struct>
+        ar_token_ids = ar.sequences[0, prompt_length : -1]                              # <struct>....</struct>
+        ar_acc = (ar_token_ids == target_token_ids).float().mean().item()
+        ar_bleu = sacrebleu.corpus_bleu(
+            [" ".join(map(str, ar_token_ids.cpu().tolist()))],
             [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
         ).score
+        
+        split, pdb_name, device = inputs['split'][0], inputs['pdb_name'][0], inputs['input_ids'].device
+        root, format = DATASET_RAW_ROOT[split][0], DATASET_RAW_ROOT[split][1]
         p_nature = OpenfoldProtein.from_file(Path(root)/f"{pdb_name}{format}").to(device)
         p_vq = self.processor.multimodal_decode(target_token_ids, ref=p_nature)['entity'][0].to(device)
-        p_ar = self.processor.multimodal_decode(generation_token_ids, ref=p_nature)['entity'][0].to(device)
+        p_ar = self.processor.multimodal_decode(ar_token_ids, ref=p_nature)['entity'][0].to(device)
         tm_vq, rmsd_l_vq, rmsd_g_vq = self.processor.compute_tm_align(p_vq, p_nature, ref=p_nature)
         tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
         
-        # exposure pipeline
-        exposure = model(
-            input_ids=inputs['labels'],                                     # <seq>....</seq><struct>....</struct>
-            attention_mask=inputs['attention_mask'],       
-        )                                                                   # ....</seq><struct>....</struct><endoftext>
-        exposure_logits: torch.Tensor = exposure.logits[0, prompt_length - 1 : -1, :] # type: ignore
-        exposure_token_ids = exposure_logits.argmax(dim=-1)                 # <struct>....</struct>
-        exposure_bleu = sacrebleu.corpus_bleu(
-            [" ".join(map(str, exposure_token_ids.cpu().tolist()))],
-            [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
-        ).score
-        exposure_loss = torch.nn.functional.nll_loss(
-            input=torch.log_softmax(exposure_logits, dim=-1),
-            target=target_token_ids,
-            reduction='mean'
-        )
-        exposure_acc = (exposure_token_ids == target_token_ids).float().mean().item()
-        
         metrics = dict(
             tid=3,
-            # meta
-            split=DATASET_SPLIT[split],
+            benchmark=DATASET_SPLIT[split],
+            ar_loss=ar_loss.item(),
+            ar_acc=ar_acc,
+            ar_bleu=ar_bleu,
             tm_ar=tm_ar,
-            rmsd_l_ar=rmsd_l_ar,
-            acc_gen=generation_acc,
-            acc_eps=exposure_acc,
-            bleu_gen=generation_bleu,
-            bleu_eps=exposure_bleu,
-            # exposure pipeline
-            loss_eps=exposure_loss,
+            tm_vq=tm_vq,
+            rmsd_ar_l=rmsd_l_ar,
+            rmsd_vq=rmsd_l_vq,
         )
         metrics = self.dummy_metrics | metrics
         
-        # format a logging message here
-        logger.info(f"""Evaluated [{pdb_name}] from [{split}]:
-Target Results:     {self.processor.tokenizer.decode(target_token_ids.cpu().tolist())}
-Exposure Results:   {self.processor.tokenizer.decode(exposure_token_ids.cpu().tolist())}
-Generation Results: {self.processor.tokenizer.decode(generation_token_ids.cpu().tolist())}
-Exposure Loss:  {exposure_loss:.4f}
-Exposure Acc:   {exposure_acc:.4f}, BLEU: {exposure_bleu:.4f}
-Generation Acc: {generation_acc:.4f}, BLEU: {generation_bleu:.4f}
+        logger.info(
+f"""////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
+Target  Structure:          {self.processor.tokenizer.decode(target_token_ids.cpu().tolist()[:4])}...
+AR      Structure:          {self.processor.tokenizer.decode(ar_token_ids.cpu().tolist()[:4])}...
+AR Loss/Acc/Bleu:           {ar_loss.item():.4f}/{ar_acc:.4f}/{ar_bleu:.4f}
 VQ v.s. Nature: TM-score = {tm_vq:.4f}, RMSD_L = {rmsd_l_vq:.4f}, RMSD_G = {rmsd_g_vq:.4f}
 AR v.s. Nature: TM-score = {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd_g_ar:.4f}
 """)
         model.train()
-        return (exposure_loss, {k:torch.tensor(v).to(device) for k, v in metrics.items()}, inputs['input_ids'])
+        return (ar_loss, {k:torch.tensor(v).to(device) for k, v in metrics.items()}, inputs['input_ids'])
     
     
     @torch.no_grad()
@@ -544,10 +560,23 @@ AR v.s. Nature: TM-score = {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd
             return self._prediction_step_plm(model, inputs, prediction_loss_only, ignore_keys)
         elif split in ['s/unicluster40']:
             return self._prediction_step_slm(model, inputs, prediction_loss_only, ignore_keys)
-        elif split in ['p2s/unicluster40', 'p2s/afdb_swissprot', 'p2s/rcsb']:
+        elif split in ['p2s/unicluster40']:
             return self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
         else:
-            return self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
+            # benchmarking, combine p2s + folding evaluation
+            loss1, metrics1, inputs1 = self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
+            loss2, metrics2, inputs2 = self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
+            # merge metrics
+            metrics1_keys = ['sequence_loss', 'sequence_acc', 'sequence_bleu',
+                             'folding_loss', 'folding_acc', 'folding_bleu',
+                             'structure_loss', 'structure_acc', 'structure_bleu']
+            metrics2_keys = ['tid', 'benchmark',
+                             'ar_loss', 'ar_acc', 'ar_bleu',
+                             'tm_ar', 'tm_vq',
+                             'rmsd_ar', 'rmsd_vq']
+            merged_metrics = {k: metrics1[k] for k in metrics1_keys}
+            merged_metrics.update({k: metrics2[k] for k in metrics2_keys})
+            return (loss1, merged_metrics, inputs1)
     
 
     @classmethod
@@ -561,28 +590,46 @@ AR v.s. Nature: TM-score = {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd
                 # pLM metrics
                 metrics['plm/sequence_loss']  = group['sequence_loss'].mean()
                 metrics['plm/sequence_acc']   = group['sequence_acc'].mean()
+                metrics['plm/sequence_bleu']  = group['sequence_bleu'].mean()
             elif tid == 1:
                 # sLM metrics
                 metrics['slm/structure_loss'] = group['structure_loss'].mean()
                 metrics['slm/structure_acc']  = group['structure_acc'].mean()
+                metrics['slm/structure_bleu'] = group['structure_bleu'].mean()
             elif tid == 2:
                 # p2s metrics
                 metrics['p2s/sequence_loss']  = group['sequence_loss'].mean()
                 metrics['p2s/sequence_acc']   = group['sequence_acc'].mean()
+                metrics['p2s/sequence_bleu']  = group['sequence_bleu'].mean()
+                metrics['p2s/folding_loss']   = group['folding_loss'].mean()
+                metrics['p2s/folding_acc']    = group['folding_acc'].mean()
+                metrics['p2s/folding_bleu']   = group['folding_bleu'].mean()                
                 metrics['p2s/structure_loss'] = group['structure_loss'].mean()
                 metrics['p2s/structure_acc']  = group['structure_acc'].mean()
+                metrics['p2s/structure_bleu'] = group['structure_bleu'].mean()
             elif tid == 3:
                 # another group by `split` field
                 for split, split_group in group.groupby('split'):
                     split_name = list(DATASET_SPLIT.keys())[int(split)] # type: ignore
                     prefix = f"folding/{split_name}/"
+                    # from ar setting
                     metrics[prefix + 'tm_ar']     = split_group['tm_ar'].mean()
-                    metrics[prefix + 'rmsd_l_ar'] = split_group['rmsd_l_ar'].mean()
-                    metrics[prefix + 'acc_gen']   = split_group['acc_gen'].mean()
-                    metrics[prefix + 'acc_eps']   = split_group['acc_eps'].mean()
-                    metrics[prefix + 'bleu_gen']  = split_group['bleu_gen'].mean()
-                    metrics[prefix + 'bleu_eps']  = split_group['bleu_eps'].mean()
-                    metrics[prefix + 'loss_eps']  = split_group['loss_eps'].mean()
+                    metrics[prefix + 'tm_vq']     = split_group['tm_vq'].mean()
+                    metrics[prefix + 'rmsd_ar']   = split_group['rmsd_ar'].mean()
+                    metrics[prefix + 'rmsd_vq']   = split_group['rmsd_vq'].mean()
+                    metrics[prefix + 'ar_loss']   = split_group['ar_loss'].mean()
+                    metrics[prefix + 'ar_acc']    = split_group['ar_acc'].mean()
+                    metrics[prefix + 'ar_bleu']   = split_group['ar_bleu'].mean()
+                    # from exposure setting
+                    metrics[prefix + 'sequence_loss']   = split_group['sequence_loss'].mean()
+                    metrics[prefix + 'sequence_acc']    = split_group['sequence_acc'].mean()
+                    metrics[prefix + 'sequence_bleu']   = split_group['sequence_bleu'].mean()
+                    metrics[prefix + 'folding_loss']    = split_group['folding_loss'].mean()
+                    metrics[prefix + 'folding_acc']     = split_group['folding_acc'].mean()
+                    metrics[prefix + 'folding_bleu']    = split_group['folding_bleu'].mean()
+                    metrics[prefix + 'structure_loss']  = split_group['structure_loss'].mean()
+                    metrics[prefix + 'structure_acc']   = split_group['structure_acc'].mean()
+                    metrics[prefix + 'structure_bleu']  = split_group['structure_bleu'].mean()
             else:
                 raise NotImplementedError()
         return metrics
