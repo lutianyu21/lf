@@ -609,7 +609,7 @@ AR v.s. Nature: TM-score = {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd
                 metrics['p2s/structure_bleu'] = group['structure_bleu'].mean()
             elif tid == 3:
                 # another group by `split` field
-                for split, split_group in group.groupby('split'):
+                for split, split_group in group.groupby('benchmark'):
                     split_name = list(DATASET_SPLIT.keys())[int(split)] # type: ignore
                     prefix = f"folding/{split_name}/"
                     # from ar setting
