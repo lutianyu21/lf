@@ -233,7 +233,7 @@ class PackingFoldingTrainer(SFTTrainer):
     def dummy_metrics(self):
         return dict(
             # unique task id
-            tid=-1,
+            tid=-1.0,
             # plm evaluation
             sequence_loss=1e5,
             sequence_acc=0.0,
@@ -294,7 +294,7 @@ Exposure Sequence:          <seq>{self.processor.tokenizer.decode(eps_token_ids.
 Sequence Loss/Acc/Bleu:     {sequence_loss.item():.4f}/{sequence_acc:.4f}/{sequence_bleu:.4f}
 """)
         metrics = dict(
-            tid=0,
+            tid=0.0,
             sequence_loss = sequence_loss.item(),
             sequence_acc = sequence_acc,
             sequence_bleu = sequence_bleu,
@@ -339,7 +339,7 @@ Exposure Structure:         <struct>{self.processor.tokenizer.decode(eps_token_i
 Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{structure_bleu:.4f}
 """)
         metrics = dict(
-            tid=1,
+            tid=1.0,
             structure_loss = structure_loss.item(),
             structure_acc = structure_acc,
             structure_bleu = structure_bleu,
@@ -447,7 +447,7 @@ Folding   Loss/Acc/Bleu:    {folding_loss.item():.4f}/{folding_acc:.4f}/{folding
 Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{structure_bleu:.4f}
 """)
         metrics = dict(
-            tid=2,
+            tid=2.0,
             sequence_loss = sequence_loss.item(),
             sequence_acc = sequence_acc,
             sequence_bleu = sequence_bleu,
@@ -531,7 +531,7 @@ Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{str
         tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
         
         metrics = dict(
-            tid=3,
+            tid=3.0,
             benchmark=DATASET_SPLIT[split],
             ar_loss=ar_loss.item(),
             ar_acc=ar_acc,
