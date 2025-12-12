@@ -33,5 +33,4 @@ dataset_text_field: text
 # evaluation
 per_device_eval_batch_size: 1
 eval_strategy: steps
-eval_steps: 10
-eval_on_start: False
+eval_steps: 100

@@ -573,6 +573,7 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
         else:
             # benchmarking, combine p2s + folding evaluation
             loss1, metrics1, inputs1 = self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
+            torch.cuda.empty_cache()
             loss2, metrics2, inputs2 = self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
             # merge metrics
             metrics1_keys = ['sequence_loss', 'sequence_acc', 'sequence_bleu',
@@ -592,12 +593,10 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
     def compute_metrics(cls, eval_pred: EvalPrediction):
         preds: Dict[str, np.ndarray] = eval_pred.predictions # type: ignore
         df = pd.DataFrame({k: v for k, v in preds.items()})
-        logger.error(df['tid'].unique())
         df['tid'] = df['tid'].astype(int)
         metrics = {}
         # group dataframe by tid
         for tid, group in df.groupby('tid'):
-            logger.error(tid)
             if tid == 0:
                 # pLM metrics
                 metrics['plm/sequence_loss']  = group['sequence_loss'].mean()

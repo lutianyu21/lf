@@ -42,7 +42,6 @@ from transformers.generation.configuration_utils import GenerationConfig
 from trl import SFTTrainer, SFTConfig
 from trl.trainer.utils import ConstantLengthDataset
 
-from utils.dplm_utils.dplm.generate_dplm import generate
 from utils.lf_utils.protein_tokenizer import DistMatrixTokenizer
 from utils.openfold_utils import OpenfoldProtein
 from utils.lf_utils import (
