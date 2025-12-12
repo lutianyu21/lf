@@ -593,6 +593,7 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
     def compute_metrics(cls, eval_pred: EvalPrediction):
         preds: Dict[str, np.ndarray] = eval_pred.predictions # type: ignore
         df = pd.DataFrame({k: v for k, v in preds.items()})
+        df['tid'] = df['tid'].astype(int)
         metrics = {}
         # group dataframe by tid
         for tid, group in df.groupby('tid'):
