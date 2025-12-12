@@ -175,8 +175,8 @@ class ProteinProcessor(ProcessorMixin):
             token_ids = token_ids[~padding_mask.bool()]
             struct_text = "".join([self.struct_template.format(token_id=i) for i in token_ids])
             struct_length = len(token_ids)
-            text = f"<seq>{seq_text}</seq><struct>{struct_text}</struct>"
-            prompt = f"<seq>{seq_text}</seq><struct>"
+            text = f"<seq> {seq_text}</seq><struct>{struct_text}</struct>"
+            prompt = f"<seq> {seq_text}</seq><struct>"
             results.append({
                 "pdb_name": protein.entry,
                 "plddt": protein.plddt,
