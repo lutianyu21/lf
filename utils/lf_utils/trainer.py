@@ -538,7 +538,7 @@ Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{str
             ar_bleu=ar_bleu,
             tm_ar=tm_ar,
             tm_vq=tm_vq,
-            rmsd_ar_l=rmsd_l_ar,
+            rmsd_ar=rmsd_l_ar,
             rmsd_vq=rmsd_l_vq,
         )
         metrics = self.dummy_metrics | metrics
