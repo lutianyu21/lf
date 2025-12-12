@@ -574,7 +574,6 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
         else:
             # benchmarking, combine p2s + folding evaluation
             loss1, metrics1, inputs1 = self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
-            torch.cuda.empty_cache()
             loss2, metrics2, inputs2 = self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
             # merge metrics
             metrics1_keys = ['sequence_loss', 'sequence_acc', 'sequence_bleu',
@@ -642,6 +641,6 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
                     metrics[prefix + 'structure_acc']   = split_group['structure_acc'].mean()
                     metrics[prefix + 'structure_bleu']  = split_group['structure_bleu'].mean()
             else:
-                raise NotImplementedError(f"Unknown task id {tid} found during metrics computation.")
+                raise NotImplementedError(f"Unknown task id {type(tid)} {tid} found during metrics computation.")
         return metrics
     
