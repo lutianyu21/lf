@@ -175,7 +175,7 @@ class PackingFoldingTrainer(SFTTrainer):
             
             # bascially we do not truncate inputs during evaluation
             # special handling for 'uniref50' long sequences
-            is_long_sequence = element['split'] in ['uniref50']
+            is_long_sequence = element['split'] in ['p/uniref50']
             outputs = tokenizer(
                 element["text"] if not use_formatting_func else formatting_func(element),
                 add_special_tokens=add_special_tokens,
