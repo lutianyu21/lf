@@ -290,7 +290,7 @@ class PackingFoldingTrainer(SFTTrainer):
         logger.info(f"""
 ////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
 Target   Sequence:          {self.processor.tokenizer.decode(target_token_ids.cpu().tolist()[:5])}...
-Exposure Sequence:          <seq>{self.processor.tokenizer.decode(eps_token_ids.cpu().tolist()[:4])}...
+Exposure Sequence:          <seq> {self.processor.tokenizer.decode(eps_token_ids.cpu().tolist()[:4])}...
 Sequence Loss/Acc/Bleu:     {sequence_loss.item():.4f}/{sequence_acc:.4f}/{sequence_bleu:.4f}
 """)
         metrics = dict(
@@ -376,10 +376,7 @@ Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{str
         # 1. whether condition is fully understood p(sequence)
         # 2. whether structure is correctly predicted p(structure | sequence)
         # 3. whether structure is fully conditioned on sequence p(structure | sequence) != p(structure)
-        
-        output = model(input_ids=inputs['labels'], attention_mask=inputs['attention_mask'], labels=inputs['labels'])
-        copy_output_loss = output.loss
-        
+                
         # find the first </seq> token, split into sequence / structure part
         constant_helper = self.processor.constant_helper()
         prompt_length = torch.sum(
@@ -387,33 +384,46 @@ Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{str
         ).int().item() + 1 # include both <seq> & </seq> token
         
         # for seq2seq task, we manually compute token-wise exposure loss
-        labels: torch.Tensor = inputs['labels'][0]                  # <seq>....</seq><struct>....</struct>
+        labels: torch.Tensor = inputs['labels']
+        target_token_ids = labels[0]                                # <seq>....</seq><struct>....</struct>
+        output = model(input_ids=labels, attention_mask=inputs['attention_mask'], labels=labels)
         logits: torch.Tensor = output.logits[0] # type: ignore      # ....</seq><struct>....</struct>
         log_softmax_logits = torch.log_softmax(logits, dim=-1)      # ....</seq><struct>....</struct><endoftext>
         eps_token_ids = logits.argmax(dim=-1)                       # ....</seq><struct>....</struct><endoftext>
-        copy_labels = labels
-        copy_token_ids = eps_token_ids
+        cache_target_token_ids = target_token_ids.detach()
+        cache_eps_token_ids = eps_token_ids.detach()
+        cache_output_loss = output.loss.detach()
         
         # sequence condition
-        sequence_loss = torch.nn.functional.nll_loss(input=log_softmax_logits[0 : prompt_length - 1, :], target=labels[1 : prompt_length])
-        sequence_acc = (eps_token_ids[0 : prompt_length - 1] == labels[1 : prompt_length]).float().mean().item() * 100.0
+        sequence_loss = torch.nn.functional.nll_loss(
+            input=log_softmax_logits[0 : prompt_length - 1, :],
+            target=target_token_ids[1 : prompt_length]
+        )
+        sequence_acc = (eps_token_ids[0 : prompt_length - 1] == target_token_ids[1 : prompt_length]).float().mean().item() * 100.0
         sequence_bleu = sacrebleu.corpus_bleu(
             [" ".join(map(str, eps_token_ids[0 : prompt_length - 1].cpu().tolist()))],
-            [[" ".join(map(str, labels[1 : prompt_length].cpu().tolist()))]]
+            [[" ".join(map(str, target_token_ids[1 : prompt_length].cpu().tolist()))]]
         ).score
         
         # structure w/ sequence condition
-        folding_loss = torch.nn.functional.nll_loss(input=log_softmax_logits[prompt_length : -1, :], target=labels[prompt_length + 1 :])
-        folding_acc = (eps_token_ids[prompt_length : -1] == labels[prompt_length + 1 :]).float().mean().item() * 100.0
+        folding_loss = torch.nn.functional.nll_loss(
+            input=log_softmax_logits[prompt_length : -1, :],
+            target=target_token_ids[prompt_length + 1 :]
+        )
+        folding_acc = (eps_token_ids[prompt_length : -1] == target_token_ids[prompt_length + 1 :]).float().mean().item() * 100.0
         folding_bleu = sacrebleu.corpus_bleu(
             [" ".join(map(str, eps_token_ids[prompt_length : -1].cpu().tolist()))],
-            [[" ".join(map(str, labels[prompt_length + 1 :].cpu().tolist()))]]
+            [[" ".join(map(str, target_token_ids[prompt_length + 1 :].cpu().tolist()))]]
         ).score
         
+        ### ! immediately realese memory to avoid OOM ###
+        del output, logits, log_softmax_logits, eps_token_ids
+        torch.cuda.empty_cache()
+        
         # structure wo/ sequence condition
-        labels = inputs['labels'][:, prompt_length :] 
-        output = model(input_ids=labels, attention_mask=torch.ones_like(labels))
+        labels = inputs['labels'][:, prompt_length :]
         target_token_ids = labels[0]                                        # <struct>....</struct>
+        output = model(input_ids=labels, attention_mask=torch.ones_like(labels))
         structure_loss = torch.nn.functional.nll_loss(
             input=torch.log_softmax(output.logits[0], dim=-1)[0 : -1, :],   # ....</struct>
             target=target_token_ids[1 :]                                    # ....</struct>
@@ -425,14 +435,13 @@ Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{str
             [[" ".join(map(str, target_token_ids[1 :].cpu().tolist()))]]
         ).score
         
-        
         # logging metrics and the first 5 tokens
         logger.info(f"""
 ////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
-Target    Sequence:         {self.processor.tokenizer.decode(copy_labels[:prompt_length].cpu().tolist()[:5])}...
-Exposure  Sequence:         <seq>{self.processor.tokenizer.decode(copy_token_ids[:prompt_length - 1].cpu().tolist()[:4])}...
-Target    Structure:        {self.processor.tokenizer.decode(copy_labels[prompt_length:].cpu().tolist()[:5])}...
-Exposure  Structure:        <struct>{self.processor.tokenizer.decode(copy_token_ids[prompt_length:].cpu().tolist()[:4])}...
+Target    Sequence:         {self.processor.tokenizer.decode(cache_target_token_ids[:prompt_length].cpu().tolist()[:5])}...
+Exposure  Sequence:         <seq> {self.processor.tokenizer.decode(cache_eps_token_ids[:prompt_length - 1].cpu().tolist()[:4])}...
+Target    Structure:        {self.processor.tokenizer.decode(cache_target_token_ids[prompt_length:].cpu().tolist()[:5])}...
+Exposure  Structure:        <struct>{self.processor.tokenizer.decode(cache_eps_token_ids[prompt_length:].cpu().tolist()[:4])}...
 Sequence  Loss/Acc/Bleu:    {sequence_loss.item():.4f}/{sequence_acc:.4f}/{sequence_bleu:.4f}
 Folding   Loss/Acc/Bleu:    {folding_loss.item():.4f}/{folding_acc:.4f}/{folding_bleu:.4f}
 Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{structure_bleu:.4f}
@@ -451,7 +460,7 @@ Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{str
         )
         metrics = self.dummy_metrics | metrics
         model.train()
-        return (copy_output_loss, {k:torch.tensor(v).to(model.device) for k, v in metrics.items()}, inputs['input_ids'])
+        return (cache_output_loss, {k:torch.tensor(v).to(model.device) for k, v in metrics.items()}, inputs['input_ids'])
     
     
     # ! IMPORTANT !
@@ -539,8 +548,8 @@ f"""////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {t
 Target  Structure:          {self.processor.tokenizer.decode(target_token_ids.cpu().tolist()[:4])}...
 AR      Structure:          {self.processor.tokenizer.decode(ar_token_ids.cpu().tolist()[:4])}...
 AR Loss/Acc/Bleu:           {ar_loss.item():.4f}/{ar_acc:.4f}/{ar_bleu:.4f}
-VQ v.s. Nature: TM-score = {tm_vq:.4f}, RMSD_L = {rmsd_l_vq:.4f}, RMSD_G = {rmsd_g_vq:.4f}
-AR v.s. Nature: TM-score = {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd_g_ar:.4f}
+VQ v.s. Nature: TM-score =  {tm_vq:.4f}, RMSD_L = {rmsd_l_vq:.4f}, RMSD_G = {rmsd_g_vq:.4f}
+AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd_g_ar:.4f}
 """)
         model.train()
         return (ar_loss, {k:torch.tensor(v).to(device) for k, v in metrics.items()}, inputs['input_ids'])
@@ -565,6 +574,7 @@ AR v.s. Nature: TM-score = {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd
         else:
             # benchmarking, combine p2s + folding evaluation
             loss1, metrics1, inputs1 = self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
+            torch.cuda.empty_cache()
             loss2, metrics2, inputs2 = self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
             # merge metrics
             metrics1_keys = ['sequence_loss', 'sequence_acc', 'sequence_bleu',
