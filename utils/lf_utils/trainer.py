@@ -575,15 +575,20 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
             loss1, metrics1, inputs1 = self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
             torch.cuda.empty_cache()
             loss2, metrics2, inputs2 = self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
+            del loss2, inputs2
+            torch.cuda.empty_cache()
             # merge metrics
-            metrics1_keys = ['sequence_loss', 'sequence_acc', 'sequence_bleu',
-                             'folding_loss', 'folding_acc', 'folding_bleu',
-                             'structure_loss', 'structure_acc', 'structure_bleu']
-            metrics2_keys = ['tid', 'benchmark',
-                             'ar_loss', 'ar_acc', 'ar_bleu',
-                             'tm_ar', 'tm_vq',
-                             'rmsd_ar', 'rmsd_vq']
-            
+            metrics1_keys = [
+                'sequence_loss', 'sequence_acc', 'sequence_bleu',
+                'folding_loss', 'folding_acc', 'folding_bleu',
+                'structure_loss', 'structure_acc', 'structure_bleu'
+            ]
+            metrics2_keys = [
+                'tid', 'benchmark',
+                'ar_loss', 'ar_acc', 'ar_bleu',
+                'tm_ar', 'tm_vq',
+                'rmsd_ar', 'rmsd_vq'
+            ]
             # ! WARN ! should ensure key ordering
             merged_metrics = self.dummy_metrics | {k: metrics1[k] for k in metrics1_keys} | {k: metrics2[k] for k in metrics2_keys}
             return (loss1, merged_metrics, inputs1)
