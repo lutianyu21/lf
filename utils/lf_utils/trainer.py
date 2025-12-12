@@ -564,7 +564,6 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
         ignore_keys: Optional[List[str]] = None
     ):
         split = inputs['split'][0]
-        logger.warning(split)
         if split in ['p/uniref50']:
             return self._prediction_step_plm(model, inputs, prediction_loss_only, ignore_keys)
         elif split in ['s/unicluster40']:
@@ -592,6 +591,7 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
     def compute_metrics(cls, eval_pred: EvalPrediction):
         preds: Dict[str, np.ndarray] = eval_pred.predictions # type: ignore
         df = pd.DataFrame({k: v for k, v in preds.items()})
+        logger.error(df)
         df['tid'] = df['tid'].astype(int)
         metrics = {}
         # group dataframe by tid
