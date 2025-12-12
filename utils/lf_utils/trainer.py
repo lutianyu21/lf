@@ -582,8 +582,9 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
                              'ar_loss', 'ar_acc', 'ar_bleu',
                              'tm_ar', 'tm_vq',
                              'rmsd_ar', 'rmsd_vq']
-            merged_metrics = {k: metrics1[k] for k in metrics1_keys}
-            merged_metrics.update({k: metrics2[k] for k in metrics2_keys})
+            
+            # ! WARN ! should ensure key ordering
+            merged_metrics = self.dummy_metrics | {k: metrics1[k] for k in metrics1_keys} | {k: metrics2[k] for k in metrics2_keys}
             return (loss1, merged_metrics, inputs1)
     
 
