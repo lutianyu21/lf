@@ -247,7 +247,7 @@ class PackingFoldingTrainer(SFTTrainer):
             folding_acc=0.0,
             folding_bleu=0.0,
             # benchmark
-            benchmark=-1,
+            benchmark=-1.0,
             ar_loss=1e5,
             ar_acc=0.0,
             ar_bleu=0.0,
@@ -591,7 +591,6 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
     def compute_metrics(cls, eval_pred: EvalPrediction):
         preds: Dict[str, np.ndarray] = eval_pred.predictions # type: ignore
         df = pd.DataFrame({k: v for k, v in preds.items()})
-        # print df['tid'].unique()
         logger.error(df['tid'].unique())
         df['tid'] = df['tid'].astype(int)
         metrics = {}
