@@ -6,12 +6,14 @@ train:
   # - /GenSIvePFS/users/lutianyu/lf/dataset/folding/unicluster40/train.parquet
   - /GenSIvePFS/users/lutianyu/lf/dataset/folding/dplm2/train_small.parquet
 
-
 weight:
   # - 0.4
   # - 0.4
   # - 0.2
-  - 1.0
+  # - 1.0
+  - 0.2
+  - 0.3
+  - 0.5
 
 eval:
   - /GenSIvePFS/users/lutianyu/lf/dataset/sequence/uniref50/eval.parquet

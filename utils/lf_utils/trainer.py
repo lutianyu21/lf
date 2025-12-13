@@ -503,7 +503,7 @@ Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{str
         )
         ar = model.generate(
             input_ids=inputs["labels"][:, :prompt_length],
-            attention_mask=inputs["attention_mask"],
+            attention_mask=torch.ones_like(inputs["labels"][:, :prompt_length]),
             generation_config=generation_config,
             logits_processor=[logits_processor],
         ) # type: ignore
