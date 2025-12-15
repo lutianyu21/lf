@@ -4,7 +4,7 @@ defaults:
   - lm: qwen3
   - trainer: sft
 
-name: qwen3-0.6B@40/1.5/0.2(2/3/5)@pt
+name: qwen3-0.6B@40/1.5/1.5(2/3/5)@pt
 
 hydra:
   output_subdir: null
