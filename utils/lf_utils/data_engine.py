@@ -13,6 +13,7 @@ import colorlog
 import logging
 import pandas as pd
 import numpy as np
+from regex import D
 import torch
 from transformers import AutoTokenizer, Qwen2TokenizerFast
 
@@ -25,7 +26,7 @@ from .protein_tokenizer import DPLMProteinTokenizer, DistMatrixTokenizer
 from .protein_processor import ProteinProcessor
 
 
-__all__ = ['DataEngine']
+__all__ = ['DataEngineBase', 'DataEngineRCSB']
 
 
 logger = logging.getLogger(__name__)
@@ -212,229 +213,14 @@ def task_cif2pickle(cif_path: Path, pickle_path: Path):
     
     
     
-    
-    
-    
-    
 
 
-
-class DataEngine:
-    
-    @classmethod
-    def _seed_everything(cls, seed: int):
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-    
-    ### Scanning Functions ###
-    # scan AFDB / SwissProt / RCSB / CASP / CAMEO dataset and yield path
-    @classmethod
-    def _scan_afdb(cls, query: set | None, tmp_dir: Path, shard_id: int) -> Iterator[Path]:
-        # e.g. for proteome-tax_id-1974607-0_v4.tar, we have
-        # - AF-A0A2H0UIM4-F1-model_v4.cif.gz
-        # - AF-A0A2H0UIM4-F1-confidence_v4.json.gz
-        # - AF-A0A2H0UIM4-F1-predicted_aligned_error_v4.json.gz
-        # scanning will extract files & return 
-        # - tmp_dir/AF-A0A2H0UIM4-F1-model_v4.cif.gz
-        
-        DATASET = [
-            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_00"),
-            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_01"),
-            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_02"),
-            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_03"),
-            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_04"),
-            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest/part_05"),
-            Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_06"),
-        ]
-        
-        for split_dir in (DATASET if shard_id < 0 else [DATASET[shard_id]]):
-            # HINT: we should extract .tar here to avoid extracting multiple times
-            for tar_path in split_dir.glob("proteome-tax_id-*_v4.tar"):
-                try:
-                    with tarfile.open(tar_path, "r") as tf:
-                        for member in tf:
-                            # skip uninterested plddt file
-                            if not member.name.endswith("-F1-model_v4.cif.gz"): continue
-                            
-                            # skip uninterested protein files
-                            if query is not None and member.name.removesuffix('.cif.gz') not in query: continue
-                              
-                            # extract to tmp_dir with the same filename
-                            tmp_path = tmp_dir / member.name
-                            if not tmp_path.exists():
-                                tf.extract(member, path=tmp_dir)
-                            
-                            # yield path for further processing
-                            yield tmp_path
-                except Exception as e:
-                    logger.error(f"Failed to scan {tar_path}: {e}")
-    
-    
-    ### query functions ###
-    def query_afdb(
-        self,
-        output_dir: Path,
-        max_concurrent: int,
-        query_path: Path,           # a .txt file containing list of accession ids
-        shard_id: int = -1,
-    ):
-        if not query_path.name.endswith('.txt'): raise NotImplementedError()    
-        rawfile_dir = output_dir / "raw"
-        pickle_dir = output_dir / "pickle"
-        rawfile_dir.mkdir(parents=True, exist_ok=True)
-        pickle_dir.mkdir(parents=True, exist_ok=True)
-        
-        # load query set: AF_AFQ8UGE8F1_1 AF_AFQ8ZB83F1_1 ...
-        query_set = set()
-        with open(query_path, 'r') as f:
-            for line in f:
-                for item in line.strip().split():
-                    if not item.startswith('AF'):
-                        continue
-                    else:
-                        # FIX here: rcsb-style AF_AFA0A075B5T2F1_1 >> uniref-style AF-A0A075B5T2-F1-model_v4
-                        item_fixed = f"AF-{item.split('_')[1][2:-2]}-F1-model_v4"
-                        query_set.add(item_fixed)
-        
-        # submit cif2pickle tasks iteratively
-        hit_count, futures, failures = 0, [], []
-        for i, it in enumerate(self._scan_afdb(query_set, rawfile_dir, shard_id)):
-            logger.info(f"Submitting task [{i+1}/{len(query_set)}]: {it.name} ...")
-            uniref_accession_extended = it.name.removesuffix('.gz').removesuffix('.cif')
-            futures.append(task_cif2pickle.remote(it, pickle_dir / f"{uniref_accession_extended}.pkl"))
-            
-            # reduce memory pressure
-            if len(futures) >= max_concurrent:
-                done, futures = ray.wait(futures, num_returns=max_concurrent // 10)
-                done_results = ray.get(done)
-                for res in done_results:
-                    status = res[0]
-                    if status == "success":
-                        hit_count = hit_count + 1
-                        logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
-                    elif status == "skipped":
-                        hit_count = hit_count + 1
-                        logger.warning(f"[{hit_count}/{len(query_set)}] Skipped: {res[1]}")
-                    elif status == "failed":
-                        failures.append(res[1])
-                        logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
-                          
-        # collecting remaining futures
-        logger.info("Collecting remaining tasks ...")
-        while futures:
-            done, futures = ray.wait(futures)
-            done_results = ray.get(done)
-            for res in done_results:
-                status = res[0]
-                if status == "success":
-                    hit_count = hit_count + 1
-                    logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
-                elif status == "skipped":
-                    hit_count = hit_count + 1
-                    logger.warning(f"[{hit_count}/{len(query_set)}] Skipped (exists): {res[1]}")
-                elif status == "failed":
-                    failures.append(res[1])
-                    logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
-                    
-        # HINT: in current design, we can only ensure that all [existed/queried] items are processed
-        failures_file = output_dir / f"failures_{shard_id}.txt"
-        if failures_file.exists(): failures_file.unlink()
-        if failures:
-            with open(failures_file, "w") as f:
-                for item in failures:
-                    f.write(f"{item}\n")
-            logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
-        logger.info(f"All tasks completed. Total queried: {hit_count}/{len(query_set)}")
-        
-    
-    
-    
-    
-    
-    
-    
-    def query_rcsb(
-        self,
-        output_dir: Path,
-        max_concurrent: int,
-        query_path: Path,           # a .txt file containing list of rcsb PDB ids  
-    ):
-        if not query_path.name.endswith('.txt'): raise NotImplementedError()
-        rawfile_dir = output_dir / "raw"
-        pickle_dir = output_dir / "pickle"
-        rawfile_dir.mkdir(parents=True, exist_ok=True)
-        pickle_dir.mkdir(parents=True, exist_ok=True)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # load query set: 1ema_1 2hbb_3 ...
-        query_set = set()
-        with open(query_path, 'r') as f:
-            for line in f:
-                for item in line.strip().split():
-                    if item.startswith('AF') or item.startswith('MA'):
-                        continue
-                    else:
-                        item = item.lower().replace('_', '%')
-                        query_set.add(item)
-                        
-        # determinitic: uniprotAccession O(1)
-        RCSB = Path("/GenSIvePFS/users/lutianyu/lf/data/rcsb/raw")
-        hit_count, futures, failures = 0, [], []
-        for q in query_set:
-            futures.append(extract2target.remote(RCSB / f'{q}.cif', rawfile_dir, pickle_dir))
-            # reduce memory pressure
-            if len(futures) >= max_concurrent:
-                done, futures = ray.wait(futures, num_returns=1)
-                done_results = ray.get(done)
-                for res in done_results:
-                    status = res[0]
-                    if status == "success":
-                        hit_count += 1
-                        logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
-                    elif status == "skipped":
-                        hit_count += 1
-                        logger.warning(f"[{hit_count}/{len(query_set)}] Skipped: {res[1]}")
-                    elif status == "failed":
-                        failures.append(res[1])
-                        logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
-        
-        # collecting remaining futures
-        while futures:
-            done, futures = ray.wait(futures)
-            done_results = ray.get(done)
-            for res in done_results:
-                status = res[0]
-                if status == "success":
-                    hit_count += 1
-                    logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
-                elif status == "skipped":
-                    hit_count += 1
-                    logger.warning(f"[{hit_count}/{len(query_set)}] Skipped (exists): {res[1]}")
-                elif status == "failed":
-                    failures.append(res[1])
-                    logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
-        
-        # HINT: in current design, we can only ensure that all [existed/queried] items are processed
-        failures_file = output_dir / "failures.txt"
-        if failures_file.exists(): failures_file.unlink()
-        if failures:
-            with open(failures_file, "w") as f:
-                for item in failures:
-                    f.write(f"{item}\n")
-            logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
-        logger.info(f"All tasks completed. Total queried: {hit_count}/{len(query_set)}")
-        
-    
-    
-    
-    
+class DataEngineBase:
     
     ### process functions ###
-    def process_pickle2parquet(
-        self,
+    @classmethod
+    def parquet(
+        cls,
         bq_path:        Path,
         pickle_dir:     Path,
         parquet_dir:    Path,
@@ -553,3 +339,295 @@ class DataEngine:
         if parquet_writer is not None:
             parquet_writer.close()
         logger.info(f"All batches are processed and saved to {parquet_dir}")
+        
+        # merege all parquet shards (remove original shards?)
+        logger.info("Merging all parquet shards ...")
+        all_tables = []
+        for shard_path in sorted(parquet_dir.glob("shard_*.parquet")):
+            table = pyarrow.parquet.read_table(shard_path) # type: ignore
+            all_tables.append(table)
+        merged_table = pyarrow.concat_tables(all_tables)
+        merged_path = parquet_dir / "dataset.parquet"
+        pyarrow.parquet.write_table(merged_table, merged_path, compression="snappy") # type: ignore
+        logger.info(f"Merged parquet saved to {merged_path} with {merged_table.num_rows} entries.")
+
+
+class DataEngineRCSB(DataEngineBase):
+    
+    @classmethod
+    def scan(cls):
+        raise NotImplementedError()
+    
+    @classmethod
+    def query(
+        cls,
+        query_path: Path,           # a .txt file containing list of rcsb PDB ids 
+        output_dir: Path,
+        max_concurrent: int = 100,
+    ):
+        if not query_path.name.endswith('.txt'): raise NotImplementedError()
+        rawfile_dir = output_dir / "raw"
+        pickle_dir = output_dir / "pickle"
+        rawfile_dir.mkdir(parents=True, exist_ok=True)
+        pickle_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # unicluster query: 1ema_1 2hbb_3 ... (should be %)
+        # cameo query:      1ema@A 2hbb@B ...
+        query_set = set()
+        with open(query_path, 'r') as f:
+            for line in f:
+                for item in line.strip().split():
+                    if item.startswith('AF') or item.startswith('MA'):
+                        continue
+                    else:
+                        item = item.replace('_', '%')
+                        item = item.lower()[0:4] + item[4:]
+                        query_set.add(item)
+                        
+        # determinitic: uniprotAccession O(1)
+        RCSB = Path("/GenSIvePFS/users/lutianyu/lf/data/rcsb/raw")
+        hit_count, futures, failures = 0, [], []
+        for q in query_set:
+            # Optional, pickle or not
+            futures.append(extract2target.remote(RCSB / f'{q}.cif', rawfile_dir, pickle_dir))
+            # reduce memory pressure
+            if len(futures) >= max_concurrent:
+                done, futures = ray.wait(futures, num_returns=1)
+                done_results = ray.get(done)
+                for res in done_results:
+                    status = res[0]
+                    if status == "success":
+                        hit_count += 1
+                        logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
+                    elif status == "skipped":
+                        hit_count += 1
+                        logger.warning(f"[{hit_count}/{len(query_set)}] Skipped: {res[1]}")
+                    elif status == "failed":
+                        failures.append(res[1])
+                        logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
+        
+        # collecting remaining futures
+        while futures:
+            done, futures = ray.wait(futures)
+            done_results = ray.get(done)
+            for res in done_results:
+                status = res[0]
+                if status == "success":
+                    hit_count += 1
+                    logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
+                elif status == "skipped":
+                    hit_count += 1
+                    logger.warning(f"[{hit_count}/{len(query_set)}] Skipped (exists): {res[1]}")
+                elif status == "failed":
+                    failures.append(res[1])
+                    logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
+        
+        # HINT: in current design, we can only ensure that all [existed/queried] items are processed
+        failures_file = output_dir / "failures.txt"
+        if failures_file.exists(): failures_file.unlink()
+        if failures:
+            with open(failures_file, "w") as f:
+                for item in failures:
+                    f.write(f"{item}\n")
+            logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
+        logger.info(f"All tasks completed. Total queried: {hit_count}/{len(query_set)}")
+        
+        # query_set - failures = processed, prepare a bq.parquet for next step
+        # {"unirefAccession":"8g38","unirefAccessionExtended":"8g38%4","picklePath":"8g38%4.pkl","cifPath":"8g38%4.cif"}
+        processed_set = query_set - set(failures)
+        records = []
+        for item in processed_set:
+            records.append({
+                "unirefAccession": item[0:4],
+                "unirefAccessionExtended": item,
+                "picklePath": f"{item}.pkl",
+                "cifPath": f"{item}.cif",
+            })
+        bq_df = pd.DataFrame.from_records(records)
+        bq_path = output_dir / "bq.parquet"
+        bq_df.to_parquet(bq_path, index=False)
+        logger.info(f"Saved bigtable to {bq_path} with {len(bq_df)} entries.")
+
+
+        
+        
+    
+    
+        
+        
+        
+
+        
+        
+    
+    
+
+
+
+
+
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+
+
+
+# class DataEngine:
+    
+#     @classmethod
+#     def _seed_everything(cls, seed: int):
+#         random.seed(seed)
+#         np.random.seed(seed)
+#         torch.manual_seed(seed)
+#         if torch.cuda.is_available():
+#             torch.cuda.manual_seed_all(seed)
+    
+#     ### Scanning Functions ###
+#     # scan AFDB / SwissProt / RCSB / CASP / CAMEO dataset and yield path
+#     @classmethod
+#     def _scan_afdb(cls, query: set | None, tmp_dir: Path, shard_id: int) -> Iterator[Path]:
+#         # e.g. for proteome-tax_id-1974607-0_v4.tar, we have
+#         # - AF-A0A2H0UIM4-F1-model_v4.cif.gz
+#         # - AF-A0A2H0UIM4-F1-confidence_v4.json.gz
+#         # - AF-A0A2H0UIM4-F1-predicted_aligned_error_v4.json.gz
+#         # scanning will extract files & return 
+#         # - tmp_dir/AF-A0A2H0UIM4-F1-model_v4.cif.gz
+        
+#         DATASET = [
+#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_00"),
+#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_01"),
+#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_02"),
+#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_03"),
+#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_04"),
+#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest/part_05"),
+#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_06"),
+#         ]
+        
+#         for split_dir in (DATASET if shard_id < 0 else [DATASET[shard_id]]):
+#             # HINT: we should extract .tar here to avoid extracting multiple times
+#             for tar_path in split_dir.glob("proteome-tax_id-*_v4.tar"):
+#                 try:
+#                     with tarfile.open(tar_path, "r") as tf:
+#                         for member in tf:
+#                             # skip uninterested afdb file
+#                             if not member.name.endswith("-F1-model_v4.cif.gz"): continue
+                            
+#                             # skip uninterested protein files
+#                             if query is not None and member.name.removesuffix('.cif.gz') not in query: continue
+                              
+#                             # extract to tmp_dir with the same filename
+#                             tmp_path = tmp_dir / member.name
+#                             if not tmp_path.exists():
+#                                 tf.extract(member, path=tmp_dir)
+                            
+#                             # yield path for further processing
+#                             yield tmp_path
+#                 except Exception as e:
+#                     logger.error(f"Failed to scan {tar_path}: {e}")
+    
+    
+#     ### query functions ###
+#     def query_afdb(
+#         self,
+#         output_dir: Path,
+#         max_concurrent: int,
+#         query_path: Path,           # a .txt file containing list of accession ids
+#         shard_id: int = -1,
+#     ):
+#         if not query_path.name.endswith('.txt'): raise NotImplementedError()    
+#         rawfile_dir = output_dir / "raw"
+#         pickle_dir = output_dir / "pickle"
+#         rawfile_dir.mkdir(parents=True, exist_ok=True)
+#         pickle_dir.mkdir(parents=True, exist_ok=True)
+        
+#         # load query set: AF_AFQ8UGE8F1_1 AF_AFQ8ZB83F1_1 ...
+#         query_set = set()
+#         with open(query_path, 'r') as f:
+#             for line in f:
+#                 for item in line.strip().split():
+#                     if not item.startswith('AF'):
+#                         continue
+#                     else:
+#                         # FIX here: rcsb-style AF_AFA0A075B5T2F1_1 >> uniref-style AF-A0A075B5T2-F1-model_v4
+#                         item_fixed = f"AF-{item.split('_')[1][2:-2]}-F1-model_v4"
+#                         query_set.add(item_fixed)
+        
+#         # submit cif2pickle tasks iteratively
+#         hit_count, futures, failures = 0, [], []
+#         for i, it in enumerate(self._scan_afdb(query_set, rawfile_dir, shard_id)):
+#             logger.info(f"Submitting task [{i+1}/{len(query_set)}]: {it.name} ...")
+#             uniref_accession_extended = it.name.removesuffix('.gz').removesuffix('.cif')
+#             futures.append(task_cif2pickle.remote(it, pickle_dir / f"{uniref_accession_extended}.pkl"))
+            
+#             # reduce memory pressure
+#             if len(futures) >= max_concurrent:
+#                 done, futures = ray.wait(futures, num_returns=max_concurrent // 10)
+#                 done_results = ray.get(done)
+#                 for res in done_results:
+#                     status = res[0]
+#                     if status == "success":
+#                         hit_count = hit_count + 1
+#                         logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
+#                     elif status == "skipped":
+#                         hit_count = hit_count + 1
+#                         logger.warning(f"[{hit_count}/{len(query_set)}] Skipped: {res[1]}")
+#                     elif status == "failed":
+#                         failures.append(res[1])
+#                         logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
+                          
+#         # collecting remaining futures
+#         logger.info("Collecting remaining tasks ...")
+#         while futures:
+#             done, futures = ray.wait(futures)
+#             done_results = ray.get(done)
+#             for res in done_results:
+#                 status = res[0]
+#                 if status == "success":
+#                     hit_count = hit_count + 1
+#                     logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
+#                 elif status == "skipped":
+#                     hit_count = hit_count + 1
+#                     logger.warning(f"[{hit_count}/{len(query_set)}] Skipped (exists): {res[1]}")
+#                 elif status == "failed":
+#                     failures.append(res[1])
+#                     logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
+                    
+#         # HINT: in current design, we can only ensure that all [existed/queried] items are processed
+#         failures_file = output_dir / f"failures_{shard_id}.txt"
+#         if failures_file.exists(): failures_file.unlink()
+#         if failures:
+#             with open(failures_file, "w") as f:
+#                 for item in failures:
+#                     f.write(f"{item}\n")
+#             logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
+#         logger.info(f"All tasks completed. Total queried: {hit_count}/{len(query_set)}")
+        
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    

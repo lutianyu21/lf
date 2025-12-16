@@ -1,7 +1,7 @@
 import ray
 ray.init(ignore_reinit_error=True)
 
-from utils.lf_utils.data_engine import DataEngine
+from utils.lf_utils.data_engine import DataEngineRCSB, DataEngineBase
 from pathlib import Path
 
 
@@ -21,14 +21,32 @@ from pathlib import Path
 # )
 
 
-DataEngine().process_pickle2parquet(
+DataEngineBase().parquet(
     bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster40/bq.parquet"),
     pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster40/pickle"),
     parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data"),
     bsz=100,
     num_consumers=2,
     num_producers=10,
-    tokenizer_name="dplm",
+    tokenizer_name="dist",
     dataset_name="unicluster",
 )
 
+
+
+# DataEngineRCSB.query(
+#     output_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022"),
+#     query_path=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022/raw/uniref_accession_extended.txt"),
+#     max_concurrent=5000,
+# )
+
+DataEngineRCSB.parquet(
+    bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022/bq.parquet"),
+    pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022/pickle"),
+    parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022"),
+    bsz=100,
+    num_consumers=2,
+    num_producers=10,
+    tokenizer_name="dplm",
+    dataset_name="p2s/cameo2022",
+)
