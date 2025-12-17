@@ -33,8 +33,6 @@ from utils.lf_utils import (
     ExtraColumnCollator,
     UnbatchedModalityLogitsProcessorBase,
     DATASET_SPLIT, DATASET_RAW_ROOT,
-    constant,
-    logits,
 )
 
 
@@ -525,8 +523,14 @@ Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{str
         split, pdb_name, device = inputs['split'][0], inputs['pdb_name'][0], inputs['input_ids'].device
         root, format = DATASET_RAW_ROOT[split][0], DATASET_RAW_ROOT[split][1]
         p_nature = OpenfoldProtein.from_file(Path(root)/f"{pdb_name}{format}").to(device)
+        
+        # WARN processor's priority: move protein to processor's device
+        # so we should either move processor to cuda here, or
+        # move protein back to cuda later (to counter processor's device move)
+        self.processor.to(device)
         p_vq = self.processor.multimodal_decode(target_token_ids, ref=p_nature)['entity'][0].to(device)
         p_ar = self.processor.multimodal_decode(ar_token_ids, ref=p_nature)['entity'][0].to(device)
+        # p_nature = p_nature.to(device)
         tm_vq, rmsd_l_vq, rmsd_g_vq = self.processor.compute_tm_align(p_vq, p_nature, ref=p_nature)
         tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
         

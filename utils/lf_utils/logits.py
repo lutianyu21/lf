@@ -65,8 +65,7 @@ class UnbatchedModalityLogitsProcessorBase(LogitsProcessor):
     
     def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
         # Update current state after a token is actually sampled.
-        # There's a dummy jump since there's no bos token)
-        
+        # There's a dummy jump since there's no bos token
         if self.dummy:
             self.dummy = False
         else:

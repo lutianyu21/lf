@@ -168,7 +168,7 @@ class DPLMProteinTokenizer(ProteinTokenizer):
         if 'residue_mask' not in kwargs:
             assert 'ref' in kwargs
             ref_residue_mask = self([kwargs.pop('ref')])['batch_residue_mask'][0]
-            kwargs['residue_mask'] = ref_residue_mask
+            kwargs['residue_mask'] = ref_residue_mask.to(token_ids.device)
             # this 'leakage' function is to conveniently evaluate structure prediction
         
         residue_mask: torch.Tensor = kwargs.pop('residue_mask', None)
