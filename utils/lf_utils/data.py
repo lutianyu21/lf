@@ -4,6 +4,7 @@ import math
 import warnings
 import random
 import numpy as np
+from sympy import re
 import torch
 import torch.utils
 import torch.utils.data
@@ -52,7 +53,7 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                 try:
                     tmp = next(iterator)
                     # TODO apply cropping here if sequence is too long
-                    # following dplm https://arxiv.org/pdf/2402.18567 a 1024 segment is cropped from the original sequence
+                    
                     if tmp['seq_length'] > self.seq_length and tmp['struct_length'] == 0:
                         pool = tmp['text'].split(' ')
                         boseq, eoseq = pool[0], pool[-1]
@@ -71,9 +72,18 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                     else:
                         more_examples = False
                         break
-            tokenized_inputs = self.tokenizer(buffer, add_special_tokens=self.add_special_tokens, truncation=False)[
-                "input_ids"
-            ]
+                
+            # for items in buffer, apply cropping & masking if needed
+            feature = {
+                'input_ids':    [],
+                'labels':       [],
+            }
+            for it in buffer:
+                f = self.tokenizer(it, add_special_tokens=self.add_special_tokens, truncation=False, text_target=it)
+                f = self._apply_cropping(f, 1024)
+                f = self._apply_masking(f)
+                feature['input_ids'].append(f['input_ids'])
+                feature['labels'].append(f['labels'])
             
             # Original Implementation:
             # |-----d1-----|----d2----|---d3--
@@ -100,23 +110,56 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
             # Modified Implementation:
             # |-----d1-----|----d2----|---d3--
             # |----d4----|-----d5-----|-d6-|--
-            examples = []
-            lines = []
-            for tokenized_input in tokenized_inputs:
+            examples = [] # stores (input_ids, labels)
+            lines_input, lines_labels = [], []
+            for tokenized_input, tokenized_labels in zip(feature['input_ids'], feature['labels']):
                 if self.append_concat_token:
                     tokenized_input = tokenized_input + [self.concat_token_id]
-                lines.extend(tokenized_input)
-                if len(lines) >= self.seq_length:
-                    examples.append(lines[:self.seq_length])
-                    lines = [] # truncate the remaining
+                    tokenized_labels = tokenized_labels + [self.concat_token_id]
+                lines_input.extend(tokenized_input)
+                lines_labels.extend(tokenized_labels)
+                if len(lines_input) >= self.seq_length:
+                    examples.append((lines_input[:self.seq_length], lines_labels[:self.seq_length]))
+                    lines_input = [] # truncate the remaining
+                    lines_labels = []
             if self.shuffle:
                 random.shuffle(examples)
             for example in examples:
                 self.current_size += 1
+                input_ids, labels = example
                 yield {
-                    "input_ids": torch.LongTensor(example),
-                    "labels": torch.LongTensor(example),
+                    "input_ids": torch.LongTensor(input_ids),
+                    "labels": torch.LongTensor(labels),
                 }
+    
+    def _apply_cropping(self, feature: Dict[str, List[int]], max_length: int) -> Dict[str, List[int]]:
+        # judge dataset type by checking bos & eos
+        sequence_only = feature['input_ids'][0] == self.tokenizer.boseq_token_id \
+                    and feature['input_ids'][-1] == self.tokenizer.eoseq_token_id
+        structure_only = feature['input_ids'][0] == self.tokenizer.bostruct_token_id \
+                    and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
+        # apply cropping process:
+        # - (dplm)https://arxiv.org/pdf/2402.18567: a 1024 window is cropped from the original sequence        
+        if sequence_only and (L := len(feature['input_ids'])) > max_length + 2:
+            warnings.warn(f"Sequence is too long({L}), cropped({max_length}) to avoid OOM.")
+            cropping_start = random.randint(1, L - max_length - 1) # \left[ \right]
+            cropping_end = cropping_start + max_length
+            feature['input_ids'] = feature['input_ids'][:1] + feature['input_ids'][cropping_start : cropping_end] + feature['input_ids'][-1:]
+            feature['labels'] = feature['labels'][:1] + feature['labels'][cropping_start : cropping_end] + feature['labels'][-1:]
+        return feature
+    
+    def _apply_masking(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
+        # judge dataset type by checking bos & eos
+        sequence_only = feature['input_ids'][0] == self.tokenizer.boseq_token_id \
+                    and feature['input_ids'][-1] == self.tokenizer.eoseq_token_id
+        structure_only = feature['input_ids'][0] == self.tokenizer.bostruct_token_id \
+                    and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
+        if not sequence_only and not structure_only:
+            mask_start: int = feature['input_ids'].index(self.tokenizer.bostruct_token_id)
+            mask_end: int = feature['input_ids'].index(self.tokenizer.eostruct_token_id)
+            feature['labels'][mask_start:mask_end + 1] = [-100] * (mask_end - mask_start + 1)
+        return feature
+ 
 
 class TextCollator:
     # handle pure-text dataset
