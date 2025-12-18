@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - dataset: dist
+  - dataset: dist2
   - lm: qwen3
   - trainer: sft
 
