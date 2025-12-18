@@ -3,6 +3,7 @@ from typing import Any, Callable, Dict, Iterable, List
 import math
 import warnings
 import random
+from networkx import reverse
 import numpy as np
 from sympy import re
 import torch
@@ -52,17 +53,6 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                     break
                 try:
                     tmp = next(iterator)
-                    # TODO apply cropping here if sequence is too long
-                    
-                    if tmp['seq_length'] > self.seq_length and tmp['struct_length'] == 0:
-                        pool = tmp['text'].split(' ')
-                        boseq, eoseq = pool[0], pool[-1]
-                        start_idx = random.randint(1, len(pool) - 1024 - 1)
-                        end_idx = start_idx + 1024
-                        tmp['text'] = ' '.join([boseq] + pool[start_idx:end_idx]) + eoseq
-                        tmp['seq_length'] = 1024
-                        warnings.warn(f"Sequence {tmp['pdb_name']} is too long, cropped to length 1024.")
-                    
                     buffer.append(self.formatting_func(tmp))
                     buffer_len += len(buffer[-1])
                 except StopIteration:
@@ -155,9 +145,12 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
         structure_only = feature['input_ids'][0] == self.tokenizer.bostruct_token_id \
                     and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
         if not sequence_only and not structure_only:
-            mask_start: int = feature['input_ids'].index(self.tokenizer.bostruct_token_id)
-            mask_end: int = feature['input_ids'].index(self.tokenizer.eostruct_token_id)
-            feature['labels'][mask_start:mask_end + 1] = [-100] * (mask_end - mask_start + 1)
+            # find last structure block
+            L = len(feature['input_ids'])
+            keep_start = L - feature['input_ids'][::-1].index(self.tokenizer.bostruct_token_id)
+            keep_end = L - feature['input_ids'][::-1].index(self.tokenizer.eostruct_token_id)
+            feature['labels'] = [-100] * L
+            feature['labels'][keep_start : keep_end] = feature['input_ids'][keep_start : keep_end]
         return feature
  
 
