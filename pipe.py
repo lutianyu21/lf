@@ -48,8 +48,7 @@ from utils.lf_utils import (
     DistMatrixTokenizer,
     DPLMProteinTokenizer,
     TextTokenizer,
-    ProteinProcessor, 
-    ItemwiseConstantLengthDataset,
+    ProteinProcessor,
     ExtraColumnCollator,
     UnbatchedModalityLogitsProcessorBase,
     DATASET_SPLIT, DATASET_RAW_ROOT,
@@ -193,8 +192,12 @@ def sft(config: DictConfig):
         train_dataset=dataset_train, # type: ignore
         eval_dataset=dataset_eval,   # type: ignore
         eval_packing=False,
-        eval_collator=ExtraColumnCollator(),
         compute_metrics=PackingFoldingTrainer.compute_metrics,
+        # extended kwargs
+        cropping=True,
+        masking=True,
+        concatenation=True,
+        concatenation_ratio=0.0,
     )
     sft_trainer.train() # type: ignore
     

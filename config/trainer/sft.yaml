@@ -25,12 +25,12 @@ fp16: False
 bf16: True
 gradient_checkpointing: True
 gradient_accumulation_steps: 1
-per_device_train_batch_size: 8
+per_device_train_batch_size: 4
 packing: True
-max_seq_length: 4096
+max_seq_length: 8192
 dataset_text_field: text
 
 # evaluation
 per_device_eval_batch_size: 1
 eval_strategy: steps
-eval_steps: 100
+eval_steps: 200

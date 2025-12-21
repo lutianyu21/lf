@@ -1,9 +1,11 @@
+import logging
+import os
 from typing import Any, Callable, Dict, Iterable, List
 
 import math
 import warnings
 import random
-from networkx import reverse
+import colorlog
 import numpy as np
 from sympy import re
 import torch
@@ -21,26 +23,95 @@ __all__ = [
 ]
 
 
-
-
 class ExtraColumnCollator:
     # handle extra columns in multi-modal dataset
-    def __init__(self):
-        pass
-        
+    def __init__(self, tokenizer: Any, **kwargs):
+        self._tokenizer = tokenizer
+        self._seed = kwargs.get('seed', 42)
+        self._cropping = kwargs.get('cropping', False)
+        self._cropping_size = kwargs.get('cropping_size', 1024)
+        self._concatenation = kwargs.get('concatenation', False)
+        self._concatenation_size = kwargs.get('concatenation_size', 2)
+        self._concatenation_ratio = kwargs.get('concatenation_ratio', 0.0)
+    
     def __call__(self, batch: List[Dict[str, Any]]) -> Any:
-        if len(batch) > 1: raise NotImplementedError("ExtraColumnCollator only accepts batch size of 1")
-        return dict(
-            input_ids=torch.tensor(batch[0]['input_ids']).unsqueeze(0),
-            attention_mask=torch.tensor(batch[0]['attention_mask']).unsqueeze(0),
-            labels=torch.tensor(batch[0]['labels']).unsqueeze(0),
-            pdb_name=list(map(lambda x: x["pdb_name"], batch)),
-            split=list(map(lambda x: x["split"], batch)),
-            seq_length=torch.tensor(list(map(lambda x: x["seq_length"], batch))),
-            struct_length=torch.tensor(list(map(lambda x: x["struct_length"], batch)))
-        )
+        if len(batch) > 1: 
+            raise NotImplementedError("ExtraColumnCollator only accepts batch size of 1")
         
+        organized_batch = dict()
+        for k, v in batch[0].items():
+            if isinstance(v, int) or isinstance(v, float):
+                organized_batch[k] = torch.tensor([item[k] for item in batch])
+            # TODO batching & padding is required to support batch-evaluation
+            elif isinstance(v, list):
+                organized_batch[k] = torch.tensor([item[k] for item in batch])
+            elif isinstance(v, torch.Tensor):
+                organized_batch[k] = torch.stack([item[k] for item in batch], dim=0)
+            elif isinstance(v, str):
+                organized_batch[k] = [item[k] for item in batch]
+            else:
+                raise NotImplementedError(f"Type {type(v)} of key {k} is not supported yet.")
+        
+        ## cropping fn ##
+        if organized_batch['split'][0] in ['p/uniref50'] and self._cropping:
+            # before: <seq>...........</seq>
+            # after:  <seq>..</seq> (cropped)
+            seq_start = int(torch.where(organized_batch['input_ids'][0] == self._tokenizer.boseq_token_id)[0][-1].item())
+            seq_end   = int(torch.where(organized_batch['input_ids'][0] == self._tokenizer.eoseq_token_id)[0][-1].item())
+            if (L := seq_end - seq_start + 1) > self._cropping_size + 2:
+                rng = np.random.default_rng(self._seed)
+                cropping_start = rng.integers(seq_start + 1, seq_end - self._cropping_size + 1) # [)
+                organized_batch['input_ids'] = torch.cat([
+                    organized_batch['input_ids'][0][:seq_start+1],
+                    organized_batch['input_ids'][0][cropping_start : cropping_start + self._cropping_size],
+                    organized_batch['input_ids'][0][seq_end:],
+                ], dim=-1).unsqueeze(0)
+                organized_batch['attention_mask'] = torch.ones_like(organized_batch['input_ids'])
+                organized_batch['labels'] = organized_batch['input_ids'].clone()
+                assert organized_batch['input_ids'][0].shape[0] == self._cropping_size + 2, \
+                    f"{organized_batch['input_ids'][0].shape[0]} != {self._cropping_size + 2}, expcted: L' = 1 + min(L, cropping_size) + 1"
+        
+        ## masking fn ## (not required for evaluation, only for training)
+        
+        ## concatenation fn ##
+        if organized_batch['split'][0] in ['p2s/unicluster40'] and self._concatenation:
+            # before: <seq>....</seq><struct>....</struct>
+            # after:  <seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
+            M, ratio, tmp = self._concatenation_size, self._concatenation_ratio, []
+            for i in range(M - 1):
+                # generate noise version <seq>....</seq><struct>....</struct>
+                # replcae `ratio` structure tokens with random structure tokens
+                copy_input_ids = organized_batch['input_ids'][0].clone()
+                struct_start = int(torch.where(copy_input_ids == self._tokenizer.bostruct_token_id)[0][-1].int().item())
+                struct_end   = int(torch.where(copy_input_ids == self._tokenizer.eostruct_token_id)[0][-1].int().item())
+                num_struct_tokens = struct_end - struct_start + 1 - 2
+                if (N := int(num_struct_tokens * ratio)) > 0:
+                    rng = np.random.default_rng(seed=self._seed + i) # for reproducibility
+                    replace_indices = rng.choice(np.arange(struct_start + 1, struct_end), size=N, replace=False)
+                    replace_values = rng.choice(self._tokenizer.struct_vocab_ids, size=N, replace=True)
+                    copy_input_ids[replace_indices] = torch.tensor(replace_values, dtype=copy_input_ids.dtype)
+                tmp.append(copy_input_ids)
+            tmp.append(organized_batch['input_ids'][0])
+            organized_batch['input_ids'] = torch.cat(tmp, dim=0).unsqueeze(0)
+            organized_batch['attention_mask'] = torch.ones_like(organized_batch['input_ids'])
+            organized_batch['labels'] = organized_batch['input_ids'].clone()
+            assert organized_batch['input_ids'][0].shape[0] == (M * tmp[0].shape[0]), \
+                f"{organized_batch['input_ids'][0].shape[0]} != {M * tmp[0].shape[0]}, expcted: L' = M * L"
+        return organized_batch
+
+
 class ItemwiseConstantLengthDataset(ConstantLengthDataset):
+    
+    def __init__(self, *args, **kwargs):
+        # pop extra arguments from kwargs
+        self._cropping = kwargs.pop('cropping', False)
+        self._cropping_size = kwargs.pop('cropping_size', 1024)
+        self._masking = kwargs.pop('masking', False)
+        self._concatenation = kwargs.pop('concatenation', False)
+        self._concatenation_size = kwargs.pop('concatenation_size', 2)
+        self._concatenation_ratio = kwargs.pop('concatenation_ratio', 0.0)
+        super().__init__(*args, **kwargs)
+    
     # unlike ConstantLengthDataset, this class will make sure that each yielded
     # example starts as a complete item from the original dataset(still packing multiple items)
     def __iter__(self):
@@ -70,8 +141,12 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
             }
             for it in buffer:
                 f = self.tokenizer(it, add_special_tokens=self.add_special_tokens, truncation=False, text_target=it)
-                f = self._apply_cropping(f, 1024)
-                f = self._apply_masking(f)
+                if self._cropping:
+                    f = self._apply_cropping(f)
+                if self._concatenation:
+                    f = self._apply_concatenation(f)
+                if self._masking:
+                    f = self._apply_masking(f)
                 feature['input_ids'].append(f['input_ids'])
                 feature['labels'].append(f['labels'])
             
@@ -122,7 +197,8 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                     "labels": torch.LongTensor(labels),
                 }
     
-    def _apply_cropping(self, feature: Dict[str, List[int]], max_length: int) -> Dict[str, List[int]]:
+    
+    def _apply_cropping(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
         # judge dataset type by checking bos & eos
         sequence_only = feature['input_ids'][0] == self.tokenizer.boseq_token_id \
                     and feature['input_ids'][-1] == self.tokenizer.eoseq_token_id
@@ -130,28 +206,67 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                     and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
         # apply cropping process:
         # - (dplm)https://arxiv.org/pdf/2402.18567: a 1024 window is cropped from the original sequence        
-        if sequence_only and (L := len(feature['input_ids'])) > max_length + 2:
-            warnings.warn(f"Sequence is too long({L}), cropped({max_length}) to avoid OOM.")
-            cropping_start = random.randint(1, L - max_length - 1) # \left[ \right]
-            cropping_end = cropping_start + max_length
-            feature['input_ids'] = feature['input_ids'][:1] + feature['input_ids'][cropping_start : cropping_end] + feature['input_ids'][-1:]
-            feature['labels'] = feature['labels'][:1] + feature['labels'][cropping_start : cropping_end] + feature['labels'][-1:]
+        if sequence_only and (L := len(feature['input_ids'])) > self._cropping_size + 2:
+            # before: <seq>...........</seq>
+            # after:  <seq>..</seq> (cropped)
+            cropping_start = random.randint(1, L - self._cropping_size - 1) # []
+            feature['input_ids'] = feature['input_ids'][:1] \
+                            + feature['input_ids'][cropping_start : cropping_start + self._cropping_size] \
+                            + feature['input_ids'][-1:]
+            feature['labels'] = feature['input_ids'].copy()
         return feature
     
-    def _apply_masking(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
+    
+    def _apply_concatenation(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
         # judge dataset type by checking bos & eos
+        # before: <seq>....</seq><struct>....</struct>
+        # after:  <seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
         sequence_only = feature['input_ids'][0] == self.tokenizer.boseq_token_id \
                     and feature['input_ids'][-1] == self.tokenizer.eoseq_token_id
         structure_only = feature['input_ids'][0] == self.tokenizer.bostruct_token_id \
                     and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
         if not sequence_only and not structure_only:
-            # find last structure block
-            L = len(feature['input_ids'])
-            keep_start = L - feature['input_ids'][::-1].index(self.tokenizer.bostruct_token_id)
-            keep_end = L - feature['input_ids'][::-1].index(self.tokenizer.eostruct_token_id)
-            feature['labels'] = [-100] * L
-            feature['labels'][keep_start : keep_end] = feature['input_ids'][keep_start : keep_end]
+            L, M, ratio, tmp = len(feature['input_ids']), self._concatenation_size, self._concatenation_ratio, []
+            for _ in range(M - 1):
+                # generate noise version <seq>....</seq><struct>....</struct>
+                # replcae `ratio` structure tokens with random structure tokens
+                struct_start = L - 1 - feature['input_ids'][::-1].index(self.tokenizer.bostruct_token_id)
+                struct_end   = L - 1 - feature['input_ids'][::-1].index(self.tokenizer.eostruct_token_id)
+                copy_input_ids = feature['input_ids'].copy()
+                num_struct_tokens = struct_end - struct_start + 1 - 2
+                if (num := int(num_struct_tokens * ratio)) > 0:
+                    rng = np.random.default_rng()
+                    replace_indices = rng.choice(np.arange(struct_start + 1, struct_end), size=num, replace=False)
+                    replace_values = rng.choice(self.tokenizer.struct_vocab_ids, size=num, replace=True)
+                    copy_input_ids[replace_indices] = replace_values.tolist()
+                tmp.append(copy_input_ids)
+            tmp.append(feature['input_ids'])
+            # flatten
+            feature['input_ids'] = [token_id for item in tmp for token_id in item]
+            feature['labels'] = feature['input_ids'].copy()
         return feature
+    
+    
+    def _apply_masking(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
+        # judge dataset type by checking bos & eos
+        # before: <seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
+        # after:  -100 .... -100 .... -100 .... -100  </seq><struct>....</struct>
+        sequence_only = feature['input_ids'][0] == self.tokenizer.boseq_token_id \
+                    and feature['input_ids'][-1] == self.tokenizer.eoseq_token_id
+        structure_only = feature['input_ids'][0] == self.tokenizer.bostruct_token_id \
+                    and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
+        if not sequence_only and not structure_only:
+            L = len(feature['input_ids'])
+            keep_start = L - 1 - feature['input_ids'][::-1].index(self.tokenizer.bostruct_token_id)
+            keep_end = L - 1- feature['input_ids'][::-1].index(self.tokenizer.eostruct_token_id)
+            feature['labels'] = [-100] * L
+            feature['labels'][keep_start : keep_end + 1] = feature['input_ids'][keep_start : keep_end + 1]
+        return feature
+    
+    
+    
+            
+
  
 
 class TextCollator:

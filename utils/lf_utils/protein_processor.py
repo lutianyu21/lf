@@ -122,36 +122,40 @@ class ProteinProcessor(ProcessorMixin):
             'entity':       entity_output
         }
     
+    @property
     def constant_helper(self) -> Dict[str, Any]:
-        (
-            pad_token_id,
-            boseq_token_id,
-            eoseq_token_id,
-            bostruct_token_id,
-            eostruct_token_id,
-            eos_token_id,
-        ) = self.tokenizer.encode(''.join([
-            self.tokenizer.pad_token,
-            self.tokenizer.boseq_token,
-            self.tokenizer.eoseq_token,
-            self.tokenizer.bostruct_token,
-            self.tokenizer.eostruct_token,
-            self.tokenizer.eos_token,
-        ]))
-        
-        seq_vocab_ids = self.tokenizer.seq_vocab_ids
-        struct_vocab_ids = self.tokenizer.struct_vocab_ids
-        return {
-            'pad_token_id': pad_token_id,
-            'boseq_token_id': boseq_token_id,
-            'eoseq_token_id': eoseq_token_id,
-            'bostruct_token_id': bostruct_token_id,
-            'eostruct_token_id': eostruct_token_id,
-            'eos_token_id': eos_token_id,
-            'seq_vocab_ids': seq_vocab_ids,
-            'struct_vocab_ids': struct_vocab_ids
-        }
-
+        if not hasattr(self, '_constant_helper'):
+            # lazy build
+            (
+                pad_token_id,
+                boseq_token_id,
+                eoseq_token_id,
+                bostruct_token_id,
+                eostruct_token_id,
+                eos_token_id,
+            ) = self.tokenizer.encode(''.join([
+                self.tokenizer.pad_token,
+                self.tokenizer.boseq_token,
+                self.tokenizer.eoseq_token,
+                self.tokenizer.bostruct_token,
+                self.tokenizer.eostruct_token,
+                self.tokenizer.eos_token,
+            ]))
+            
+            seq_vocab_ids = self.tokenizer.seq_vocab_ids
+            struct_vocab_ids = self.tokenizer.struct_vocab_ids
+            self._constant_helper = {
+                'pad_token_id': pad_token_id,
+                'boseq_token_id': boseq_token_id,
+                'eoseq_token_id': eoseq_token_id,
+                'bostruct_token_id': bostruct_token_id,
+                'eostruct_token_id': eostruct_token_id,
+                'eos_token_id': eos_token_id,
+                'seq_vocab_ids': seq_vocab_ids,
+                'struct_vocab_ids': struct_vocab_ids
+            }
+        return self._constant_helper
+    
     @staticmethod
     def compute_tm_align(structure1: OpenfoldProtein, structure2: OpenfoldProtein, ref: OpenfoldProtein | None) -> Tuple[float, float, float]:
         if ref is not None:
