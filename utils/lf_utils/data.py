@@ -238,7 +238,10 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                     rng = np.random.default_rng()
                     replace_indices = rng.choice(np.arange(struct_start + 1, struct_end), size=num, replace=False)
                     replace_values = rng.choice(self.tokenizer.struct_vocab_ids, size=num, replace=True)
+                    # TODO consider torch rather than list ?
+                    copy_input_ids = np.array(copy_input_ids)
                     copy_input_ids[replace_indices] = replace_values.tolist()
+                    copy_input_ids = copy_input_ids.tolist()
                 tmp.append(copy_input_ids)
             tmp.append(feature['input_ids'])
             # flatten
