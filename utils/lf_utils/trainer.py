@@ -524,9 +524,10 @@ CFolding  Loss/Acc/Bleu:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}/{cfold
         start_time = time.time()
         model.eval()
         
-        # find the first </seq> token, split into sequence / structure part
+        # {prompt} | <seq>....</seq> | <struct>....</struct>
         constant_helper = self.processor.constant_helper
-        prompt_length = torch.sum((inputs['labels'][0] == constant_helper['eoseq_token_id']).cumsum(dim=0) == 0).int().item() + 1 # include both <seq> & </seq> token itself
+        struct_start = int(torch.where(inputs['labels'][0] == constant_helper['bostruct_token_id'])[0][-1].int().item())
+        prompt_length = struct_start # wo/ <struct> token itself
         answer_length = inputs['labels'].shape[1] - prompt_length
         
         # exposure result can be obtained from p2s evaluation

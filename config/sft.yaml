@@ -4,7 +4,7 @@ defaults:
   - lm: qwen3
   - trainer: sft
 
-name: qwen3-0.6B-dist@10%_denoising
+name: qwen3-0.6B-dist@hacking
 
 hydra:
   output_subdir: null

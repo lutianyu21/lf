@@ -197,7 +197,7 @@ def sft(config: DictConfig):
         cropping=True,
         masking=True,
         concatenation=True,
-        concatenation_ratio=0.1,
+        concatenation_ratio=0.0,
     )
     sft_trainer.train() # type: ignore
     

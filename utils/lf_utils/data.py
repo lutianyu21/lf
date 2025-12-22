@@ -74,7 +74,7 @@ class ExtraColumnCollator:
         ## masking fn ## (not required for evaluation, only for training)
         
         ## concatenation fn ##
-        if organized_batch['split'][0] in ['p2s/unicluster40'] and self._concatenation:
+        if organized_batch['split'][0] in ['p2s/unicluster40', 'cameo2022', 'casp15', 'casp16', 'dev'] and self._concatenation:
             # before: <seq>....</seq><struct>....</struct>
             # after:  <seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
             M, ratio, tmp = self._concatenation_size, self._concatenation_ratio, []
@@ -196,81 +196,81 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                     "input_ids": torch.LongTensor(input_ids),
                     "labels": torch.LongTensor(labels),
                 }
+                
+                
+    def _is_sequence_dataset(self, feature: Dict[str, List[int]]) -> bool:
+        return  feature['input_ids'][0]  == self.tokenizer.boseq_token_id \
+            and feature['input_ids'][-1] == self.tokenizer.eoseq_token_id
     
-    
-    def _apply_cropping(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
-        # judge dataset type by checking bos & eos
-        sequence_only = feature['input_ids'][0] == self.tokenizer.boseq_token_id \
-                    and feature['input_ids'][-1] == self.tokenizer.eoseq_token_id
-        structure_only = feature['input_ids'][0] == self.tokenizer.bostruct_token_id \
-                    and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
-        # apply cropping process:
-        # - (dplm)https://arxiv.org/pdf/2402.18567: a 1024 window is cropped from the original sequence        
-        if sequence_only and (L := len(feature['input_ids'])) > self._cropping_size + 2:
-            # before: <seq>...........</seq>
-            # after:  <seq>..</seq> (cropped)
-            cropping_start = random.randint(1, L - self._cropping_size - 1) # []
-            feature['input_ids'] = feature['input_ids'][:1] \
-                            + feature['input_ids'][cropping_start : cropping_start + self._cropping_size] \
-                            + feature['input_ids'][-1:]
-            feature['labels'] = feature['input_ids'].copy()
-        return feature
-    
-    
-    def _apply_concatenation(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
-        # judge dataset type by checking bos & eos
-        # before: <seq>....</seq><struct>....</struct>
-        # after:  <seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
-        sequence_only = feature['input_ids'][0] == self.tokenizer.boseq_token_id \
-                    and feature['input_ids'][-1] == self.tokenizer.eoseq_token_id
-        structure_only = feature['input_ids'][0] == self.tokenizer.bostruct_token_id \
-                    and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
-        if not sequence_only and not structure_only:
-            L, M, ratio, tmp = len(feature['input_ids']), self._concatenation_size, self._concatenation_ratio, []
-            for _ in range(M - 1):
-                # generate noise version <seq>....</seq><struct>....</struct>
-                # replcae `ratio` structure tokens with random structure tokens
-                struct_start = L - 1 - feature['input_ids'][::-1].index(self.tokenizer.bostruct_token_id)
-                struct_end   = L - 1 - feature['input_ids'][::-1].index(self.tokenizer.eostruct_token_id)
-                copy_input_ids = feature['input_ids'].copy()
-                num_struct_tokens = struct_end - struct_start + 1 - 2
-                if (num := int(num_struct_tokens * ratio)) > 0:
-                    rng = np.random.default_rng()
-                    replace_indices = rng.choice(np.arange(struct_start + 1, struct_end), size=num, replace=False)
-                    replace_values = rng.choice(self.tokenizer.struct_vocab_ids, size=num, replace=True)
-                    # TODO consider torch rather than list ?
-                    copy_input_ids = np.array(copy_input_ids)
-                    copy_input_ids[replace_indices] = replace_values.tolist()
-                    copy_input_ids = copy_input_ids.tolist()
-                tmp.append(copy_input_ids)
-            tmp.append(feature['input_ids'])
-            # flatten
-            feature['input_ids'] = [token_id for item in tmp for token_id in item]
-            feature['labels'] = feature['input_ids'].copy()
-        return feature
-    
-    
-    def _apply_masking(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
-        # judge dataset type by checking bos & eos
-        # before: <seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
-        # after:  -100 .... -100 .... -100 .... -100  </seq><struct>....</struct>
-        sequence_only = feature['input_ids'][0] == self.tokenizer.boseq_token_id \
-                    and feature['input_ids'][-1] == self.tokenizer.eoseq_token_id
-        structure_only = feature['input_ids'][0] == self.tokenizer.bostruct_token_id \
-                    and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
-        if not sequence_only and not structure_only:
-            L = len(feature['input_ids'])
-            keep_start = L - 1 - feature['input_ids'][::-1].index(self.tokenizer.bostruct_token_id)
-            keep_end = L - 1- feature['input_ids'][::-1].index(self.tokenizer.eostruct_token_id)
-            feature['labels'] = [-100] * L
-            feature['labels'][keep_start : keep_end + 1] = feature['input_ids'][keep_start : keep_end + 1]
-        return feature
-    
-    
-    
+    def _is_structure_dataset(self, feature: Dict[str, List[int]]) -> bool:
+        return  feature['input_ids'][0]  == self.tokenizer.bostruct_token_id \
+            and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
             
-
- 
+    def _is_folding_dataset(self, feature: Dict[str, List[int]]) -> bool:
+        return not self._is_sequence_dataset(feature) and not self._is_structure_dataset(feature)        
+    
+    
+    # Reference:
+    # - (dplm) https://arxiv.org/pdf/2402.18567
+    def _apply_cropping(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
+        # genetic sequences are usually longer than the model max_length
+        if not self._is_sequence_dataset(feature):
+            return feature
+        
+        if (L := len(feature['input_ids'])) <= 1 + self._cropping_size + 1:
+            return feature
+        cropping_start = random.randint(1, L - self._cropping_size - 1)
+        feature['input_ids'] = feature['input_ids'][:1] \
+                             + feature['input_ids'][cropping_start : cropping_start + self._cropping_size] \
+                             + feature['input_ids'][-1:]
+        feature['labels'] = feature['input_ids'].copy()
+        return feature
+    
+    # Reference:
+    # - (poet) 
+    def _apply_concatenation(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
+        if not self._is_folding_dataset(feature):
+            return feature
+        
+        # repeat M times & replcae ratio(%) structure tokens with random structure tokens:
+        # <seq>....</seq><struct>....</struct>
+        # <seq>....</seq><struct>....</struct> | <seq>....</seq><struct>....</struct> | ...
+        L, M, ratio, tmp = len(feature['input_ids']), self._concatenation_size, self._concatenation_ratio, []
+        struct_start = L - 1 - feature['input_ids'][::-1].index(self.tokenizer.bostruct_token_id)
+        struct_end   = L - 1 - feature['input_ids'][::-1].index(self.tokenizer.eostruct_token_id)
+        for _ in range(M - 1):
+            input_ids = feature['input_ids'].copy()
+            # HINT second occurrence hacking can be implemented by setting ratio=0.0
+            if (num := int((struct_end - struct_start + 1 - 2) * ratio)) > 0:
+                rng = np.random.default_rng()
+                replace_indices = rng.choice(np.arange(struct_start + 1, struct_end), size=num, replace=False)
+                replace_values  = rng.choice(self.tokenizer.struct_vocab_ids, size=num, replace=True)
+                # numpy indexing trick
+                input_ids = np.array(input_ids)
+                input_ids[replace_indices] = replace_values.tolist()
+                input_ids = input_ids.tolist()
+            tmp += input_ids
+        feature['input_ids'] = tmp + feature['input_ids']
+        feature['labels'] = feature['input_ids'].copy()
+        return feature
+    
+    # Reference:
+    # - (I2T, T2I)
+    def _apply_masking(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
+        if not self._is_folding_dataset(feature):
+            return feature
+        # do not compute loss on prompt region:
+        # <seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
+        # -100 .... -100 .... -100 .... -100 .... -100 ....  <struct>....</struct>
+        L = len(feature['input_ids'])
+        struct_start = L - 1 - feature['input_ids'][::-1].index(self.tokenizer.bostruct_token_id)
+        struct_end   = L - 1 - feature['input_ids'][::-1].index(self.tokenizer.eostruct_token_id)
+        # only modify labels
+        tmp = [-100] * L
+        tmp[struct_start : struct_end + 1] = feature['labels'][struct_start : struct_end + 1]
+        feature['labels'] = tmp
+        return feature
+    
 
 class TextCollator:
     # handle pure-text dataset
