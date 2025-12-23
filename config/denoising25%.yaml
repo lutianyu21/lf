@@ -1,8 +1,8 @@
 defaults:
-  - _self_
   - dataset: dist2
   - lm: qwen3
   - trainer: sft
+  - _self_
 
 # overwrite experiment config
 name: qwen3-0.6B-dist@25%
