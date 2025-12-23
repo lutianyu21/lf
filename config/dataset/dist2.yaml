@@ -17,4 +17,9 @@ eval:
   - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/folding/unicluster40/eval.parquet
   # target benchmark
   - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/folding/benchmark/*.parquet
- 
+
+processing:
+  cropping:             True
+  masking:              False
+  concatenation:        False
+  concatenation_ratio:  0.0

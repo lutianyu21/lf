@@ -194,10 +194,10 @@ def sft(config: DictConfig):
         eval_packing=False,
         compute_metrics=PackingFoldingTrainer.compute_metrics,
         # extended kwargs
-        cropping=True,
-        masking=True,
-        concatenation=True,
-        concatenation_ratio=0.05,
+        cropping=config_dataset.processing.cropping,
+        masking=config_dataset.processing.masking,
+        concatenation=config_dataset.processing.concatenation,
+        concatenation_ratio=config_dataset.processing.concatenation_ratio,
     )
     sft_trainer.train() # type: ignore
     
