@@ -3,7 +3,7 @@ type: dist
 train:
   # - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/sequence/uniref50/train.parquet
   # - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/structure/unicluster40/train.parquet
-  - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/folding/unicluster40/train.parquet
+  - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/folding/dplm2/train.parquet
 
 weight:
   # - 0.2

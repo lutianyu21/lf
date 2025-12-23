@@ -196,7 +196,7 @@ def sft(config: DictConfig):
         # extended kwargs
         cropping=True,
         masking=True,
-        concatenation=True,
+        concatenation=False,
         concatenation_ratio=0.0,
     )
     sft_trainer.train() # type: ignore
