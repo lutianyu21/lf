@@ -9,7 +9,7 @@ name: qwen3-0.6B-dist@25%
 dataset:
   processing:
     cropping:             True
-    masking:              False
+    masking:              True
     concatenation:        True
     concatenation_ratio:  0.25
 
