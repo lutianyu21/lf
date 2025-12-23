@@ -12,8 +12,8 @@ overwrite_output_dir: True
 optim: adamw_torch
 weight_decay: 0.01
 max_grad_norm: 1.0
-max_steps: 5000
-warmup_steps: 1000
+max_steps: 1000
+warmup_steps: 500
 learning_rate: 5e-4
 lr_scheduler_type: polynomial
 lr_scheduler_kwargs:
