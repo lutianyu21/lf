@@ -15,7 +15,8 @@ from ..openfold_utils.io import OpenfoldBackbone, OpenfoldProtein, atom_order
 __all__ = [
     'ProteinTokenizer',
     'DPLMProteinTokenizer',
-    'DistMatrixTokenizer',
+    'DistMatrixTokenizerV2',
+    'DistMatrixTokenizerV3',
 ]
 
 
@@ -186,14 +187,14 @@ class DPLMProteinTokenizer(ProteinTokenizer):
         return self.config.codebook_config.num_codes
 
 
-class DistMatrixTokenizer(ProteinTokenizer):
+class DistMatrixTokenizerV2(ProteinTokenizer):
     def __init__(
         self,
         tokenizer_ckpt_path: str | Path,
         structure_ckpt_path: str | Path,
         map_location: Union[str, torch.device] = "cpu",
     ) -> None:
-        from ..dist_utils import DiscreteTokenizer, StructurePredictionModel
+        from ..dist_utils import DiscreteTokenizerV2, StructurePredictionModelV2
         super().__init__()
         self.tokenizer_ckpt_path = Path(tokenizer_ckpt_path).resolve()
         self.structure_ckpt_path = Path(structure_ckpt_path).resolve()
@@ -203,7 +204,7 @@ class DistMatrixTokenizer(ProteinTokenizer):
         tokenizer_checkpoint = torch.load(self.tokenizer_ckpt_path, map_location=map_location, weights_only=False)
         self.config = tokenizer_checkpoint["hyper_parameters"]["config"]
 
-        self.model = DiscreteTokenizer(
+        self.model = DiscreteTokenizerV2(
             in_channels=self.config.model.in_channels,
             embed_dim=self.config.model.embed_dim,
             patch_size=self.config.model.patch_size,
@@ -231,7 +232,7 @@ class DistMatrixTokenizer(ProteinTokenizer):
         
         self.use_frame_coordinates = bool(getattr(self.structure_config.model, "use_frame_coordinates"))
         output_dim = 9 if self.use_frame_coordinates else 3
-        self.structure_model = StructurePredictionModel(
+        self.structure_model = StructurePredictionModelV2(
             in_channels=self.structure_config.model.in_channels,
             embed_dim=self.structure_config.model.embed_dim,
             num_layers=self.structure_config.model.num_layers,
@@ -260,10 +261,10 @@ class DistMatrixTokenizer(ProteinTokenizer):
     
     @classmethod
     def get_instance(cls):
-        from ..dist_utils import version_discrete_tokenizer, version_structure_head
+        from ..dist_utils import version_discrete_tokenizer_v2, version_structure_head_v2
         return cls(
-            tokenizer_ckpt_path=version_discrete_tokenizer,
-            structure_ckpt_path=version_structure_head,
+            tokenizer_ckpt_path=version_discrete_tokenizer_v2,
+            structure_ckpt_path=version_structure_head_v2,
             map_location="cpu",
         )
 
@@ -388,6 +389,261 @@ class DistMatrixTokenizer(ProteinTokenizer):
         protein = OpenfoldProtein.from_backbone(backbone)
         return protein
     
+    @property
+    def device(self) -> torch.device:
+        return next(self.model.parameters()).device
+
+    @property
+    def vsz(self) -> int:
+        quantizer = self.model.quantizer
+        return quantizer.codebook_size
+
+
+
+class DistMatrixTokenizerV3(ProteinTokenizer):
+    
+    def __init__(
+        self,
+        tokenizer_ckpt_path: str | Path,
+        structure_ckpt_path: str | Path,
+        map_location: Union[str, torch.device] = "cpu",
+    ) -> None:
+        from ..dist_utils import DiscreteTokenizerV3, StructurePredictionModelV3
+        super().__init__()
+        self.tokenizer_ckpt_path = Path(tokenizer_ckpt_path).resolve()
+        self.structure_ckpt_path = Path(structure_ckpt_path).resolve()
+        self.map_location = map_location
+        self._device = torch.device(map_location)
+        self.REFERENCE_FRAME = torch.tensor(
+            [
+                [-0.522, 1.362, 0.0],  # N
+                [0.0, 0.0, 0.0],      # CA
+                [1.525, 0.0, 0.0],    # C
+            ],
+            dtype=torch.float32,
+        )
+        print(f"Loading tokenizer checkpoint from: {self.tokenizer_ckpt_path}")
+        tokenizer_checkpoint = torch.load(self.tokenizer_ckpt_path, map_location=map_location, weights_only=False)
+        self.config = tokenizer_checkpoint["hyper_parameters"]["config"]
+
+        self.model = DiscreteTokenizerV3(
+            in_channels=self.config.model.in_channels,
+            embed_dim=self.config.model.embed_dim,
+            patch_size=self.config.model.patch_size,
+            num_layers=self.config.model.num_layers,
+            num_heads=self.config.model.num_heads,
+            mlp_ratio=self.config.model.mlp_ratio,
+            dropout=self.config.model.dropout,
+            z_channels=self.config.model.z_channels,
+            double_z=self.config.model.double_z,
+            quantizer_type=self.config.quantizer._target_,
+            quantizer_kwargs=dict(self.config.quantizer.params),
+        )
+
+        tokenizer_state_prefix = "model."
+        tokenizer_state = {
+            k[len(tokenizer_state_prefix) :]: v
+            for k, v in tokenizer_checkpoint["state_dict"].items()
+            if k.startswith(tokenizer_state_prefix)
+        }
+        self.model.load_state_dict(tokenizer_state)
+        self.model.to(self.device)
+
+        print(f"Loading structure checkpoint from: {self.structure_ckpt_path}")
+        structure_checkpoint = torch.load(self.structure_ckpt_path, map_location=map_location, weights_only=False)
+        self.structure_config = structure_checkpoint["hyper_parameters"]["config"]
+
+        frame_parameterization = self.structure_config.model.frame_parameterization
+        reference_frame = (self.REFERENCE_FRAME / self.structure_config.data.std_data).clone()
+
+        if self.structure_config.model.frame_parameterization == "direct":
+            output_dim = 9
+        elif self.structure_config.model.frame_parameterization == "rigid":
+            output_dim = 9
+
+        self.structure_model = StructurePredictionModelV3(
+            in_channels=self.structure_config.model.in_channels,
+            embed_dim=self.structure_config.model.embed_dim,
+            num_layers=self.structure_config.model.num_layers,
+            num_pairformer_blocks=self.structure_config.model.num_pairformer_blocks,
+            num_heads=self.structure_config.model.num_heads,
+            mlp_ratio=self.structure_config.model.mlp_ratio,
+            dropout=self.structure_config.model.dropout,
+            max_seq_len=self.structure_config.model.max_seq_len,
+            use_sinusoidal_pos_embed=self.structure_config.model.use_sinusoidal_pos_embed,
+            output_dim=output_dim,
+            frame_parameterization=frame_parameterization,
+            reference_frame=reference_frame,
+        )
+
+        structure_state_prefix = "model."
+        structure_state = {
+            k[len(structure_state_prefix) :]: v
+            for k, v in structure_checkpoint["state_dict"].items()
+            if k.startswith(structure_state_prefix)
+        }
+        self.structure_model.load_state_dict(structure_state)
+        self.structure_model.to(self.device)
+
+        self.std_value = float(self.config.data.std_value)
+        self.std_data = float(self.structure_config.data.std_data)
+
+        self.model.eval()
+        self.structure_model.eval()
+        
+    @classmethod
+    def get_instance(cls):
+        from ..dist_utils import version_discrete_tokenizer_v3, version_structure_head_v3
+        return cls(
+            tokenizer_ckpt_path=version_discrete_tokenizer_v3,
+            structure_ckpt_path=version_structure_head_v3,
+            map_location="cpu",
+        )
+
+    @torch.no_grad()
+    def __call__(self, batch_proteins: list[OpenfoldProtein], **kwargs) -> dict[str, torch.Tensor]:
+        # support batch encode, thus padding_mask is returned
+        indices_list = []
+        for protein in batch_proteins:
+            indices = self.encode(protein)
+            indices_list.append(indices)
+        
+        batch_indices = torch.nn.utils.rnn.pad_sequence(
+            indices_list, batch_first=True, padding_value=-100
+        )
+        padding_mask = (batch_indices == -100).long()
+
+        return {
+            "batch_token_ids": batch_indices,
+            "batch_padding_mask": padding_mask,
+        }
+
+    @torch.no_grad()
+    def batch_decode(self, batch_token_ids: torch.Tensor, **kwargs) -> list[OpenfoldProtein]:
+        # support batch decode, thus padding_mask is expected(in kwargs)
+        batch_lengths = kwargs.get('batch_lengths', None)
+        protein_lengths = kwargs.get('protein_lengths', None)
+        if batch_lengths is None or protein_lengths is None:
+            raise ValueError("batch_lengths and protein_lengths must be provided for batch decoding.")
+        batch_size = batch_token_ids.shape[0]
+        decoded_proteins = []
+        for i in range(batch_size):
+            batch_length = batch_lengths[i]
+            token_ids = batch_token_ids[i][:batch_length]
+            protein_length = protein_lengths[i]
+            protein = self.decode(token_ids, protein_length=protein_length)
+            decoded_proteins.append(protein)
+        return decoded_proteins
+
+    @torch.no_grad()
+    def encode(self, protein: OpenfoldProtein, **kwargs) -> torch.Tensor:    
+        patch_size = self.config.model.patch_size
+        device = self.device
+        frame_indices = [atom_order['N'], atom_order['CA'], atom_order['C']]
+        frame_indices = [atom_order['N'], atom_order['CA'], atom_order['C']]
+        valid_mask = protein.residue_atom37_mask[:, frame_indices]
+        valid_mask = valid_mask.bool().all(dim=-1)
+        ca_coords = protein.residue_atom37_coord[:, atom_order['CA'], :].to(device)
+        frame_coords = protein.residue_atom37_coord[:, frame_indices, :].to(device)
+
+        def compute_local_pair_features(frame_coords: torch.Tensor, frame_coords_mask: torch.Tensor) -> torch.Tensor:
+            N_pos = frame_coords[:, 0, :]
+            CA_pos = frame_coords[:, 1, :]
+            C_pos = frame_coords[:, 2, :]
+
+            diff = CA_pos[:, None, :] - CA_pos[None, :, :]
+            dist_map = torch.norm(diff, dim=-1, keepdim=True)
+            L = dist_map.shape[0]
+            dist_map = 1 / (dist_map + 1e-5)
+            diag_indices = torch.arange(L, device=dist_map.device)
+            dist_map[diag_indices, diag_indices, :] = 0.0
+            mask = torch.tril(torch.ones((L, L), device=dist_map.device, dtype=torch.bool), diagonal=-1)
+            dist_map[mask] = -dist_map[mask]
+
+            x_axis = F.normalize(C_pos - CA_pos, dim=-1)
+            y_axis = F.normalize(N_pos - CA_pos, dim=-1)
+            z_axis = F.normalize(torch.cross(x_axis, y_axis, dim=-1), dim=-1)
+            y_axis = F.normalize(torch.cross(z_axis, x_axis, dim=-1), dim=-1)
+
+            rotation = torch.stack([x_axis, y_axis, z_axis], dim=-1)
+            v_ij = CA_pos[None, :, :] - CA_pos[:, None, :]
+            v_local = torch.einsum('nij,nmj->nmi', rotation.transpose(-1, -2), v_ij)
+            v_local = F.normalize(v_local, dim=-1, eps=1e-8)
+
+            pair_mask = frame_coords_mask[:, None] & frame_coords_mask[None, :]
+            return torch.cat([dist_map * 21, v_local * 2], dim=-1) * pair_mask.unsqueeze(-1)
+        
+        distance_tensor = compute_local_pair_features(frame_coords, valid_mask)
+        seq_len = distance_tensor.size(0)
+        padded_len = math.ceil(seq_len / patch_size) * patch_size
+
+        if padded_len != seq_len:
+            pad_amount = padded_len - seq_len
+            distance_tensor = F.pad(distance_tensor, (0, 0, 0, pad_amount, 0, pad_amount))
+
+        distance_tensor = distance_tensor.to(device)
+        model_input = distance_tensor.unsqueeze(0)
+        quantized, indices, _ = self.model.encode(model_input)
+        indices = indices.reshape(indices.shape[0], -1)
+        return indices.squeeze(0).contiguous()
+
+    @torch.no_grad()
+    def decode(self, token_ids: torch.Tensor, **kwargs) -> OpenfoldProtein:
+        if 'protein_length' not in kwargs:
+            if 'ref' not in kwargs:
+                raise ValueError("Expect either `protein_length` or `ref` in kwargs for decoding.")
+            kwargs['protein_length'] = len(kwargs.pop('ref'))
+        
+        protein_length = kwargs.get("protein_length")
+        if protein_length is None:
+            raise ValueError("protein_length must be provided for decoding.")
+        patch_size = self.config.model.patch_size
+        z_channels = self.config.model.z_channels
+
+        token_ids = token_ids.to(self.device)
+        if token_ids.dim() == 1:
+            token_ids = token_ids.unsqueeze(0)
+        token_ids = token_ids.to(torch.int32)
+
+        padded_len = math.ceil(protein_length / patch_size) * patch_size
+        h_patches = padded_len // patch_size
+        w_patches = h_patches
+        expected_tokens = h_patches * w_patches
+        if token_ids.shape[-1] != expected_tokens:
+            raise ValueError(
+                f"Expected {expected_tokens} tokens for protein length {protein_length}, "
+                f"but received {token_ids.shape[-1]} tokens."
+            )
+
+        quantizer = self.model.quantizer
+        codes = quantizer.indices_to_codes(token_ids)
+        codes = codes.to(self.device, dtype=torch.float32)
+
+        batch_size = codes.shape[0]
+        quantized = codes.view(batch_size, h_patches, w_patches, z_channels)
+        quantized = quantized.permute(0, 3, 1, 2).contiguous()
+
+        reconstructed = self.model.decode(quantized)
+        distance_matrix = reconstructed[:, : protein_length, : protein_length, :]
+
+        residue_atom37_coord = torch.zeros((protein_length, 37, 3), device=self.device)
+        residue_atom37_mask = torch.zeros((protein_length, 37), device=self.device)
+
+        predicted_frames = self.structure_model(distance_matrix) * self.std_data
+        predicted_frames = predicted_frames.squeeze(0)
+        frame_indices = [atom_order["N"], atom_order["CA"], atom_order["C"]]
+        for atom_idx, frame_index in enumerate(frame_indices):
+            residue_atom37_coord[:, frame_index, :] = predicted_frames[:, atom_idx, :]
+            residue_atom37_mask[:, frame_index] = 1.0
+        backbone = OpenfoldBackbone.from_dict(
+            dict(
+                residue_atom37_coord=residue_atom37_coord,
+                residue_atom37_mask=residue_atom37_mask,
+            )
+        )
+        protein = OpenfoldProtein.from_backbone(backbone)
+        return protein
+
     @property
     def device(self) -> torch.device:
         return next(self.model.parameters()).device

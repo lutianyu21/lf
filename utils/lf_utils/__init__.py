@@ -2,10 +2,9 @@ from .protein_processor import ProteinProcessor
 from .protein_tokenizer import (
     ProteinTokenizer, 
     DPLMProteinTokenizer,
-    DistMatrixTokenizer,
+    DistMatrixTokenizerV2,
+    DistMatrixTokenizerV3,
 )
-from .text_tokenizer import TextTokenizer
-from .dataset import step1_pickle, step2_parquet, step3_merge
 from .data_engine import DataEngineRCSB, DataEngineBase
 from .data import ExtraColumnCollator, ItemwiseConstantLengthDataset
 from .logits import UnbatchedModalityLogitsProcessorBase

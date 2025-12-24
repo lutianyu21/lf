@@ -177,7 +177,7 @@ class ViTEncoder(nn.Module):
         pos_embed = self.get_pos_embed(h_patches, w_patches).to(x.dtype)
         x = x + pos_embed
         for block in self.blocks:
-            x = block(x, valid_mask=valid_mask)
+            x = x + block(x, valid_mask=valid_mask)
         x = self.norm(x)
         x = self.head(x)    # [B, num_patches, z_channels]
         
@@ -256,7 +256,7 @@ class ViTDecoder(nn.Module):
         x = x + pos_embed
 
         for block in self.blocks:
-            x = block(x, valid_mask=valid_mask)
+            x = x + block(x, valid_mask=valid_mask)
         x = self.norm(x)
         x = x.transpose(1, 2).reshape(B, -1, H, W)  # [B, embed_dim, H, W]
         
@@ -292,6 +292,9 @@ def create_quantizer(quantizer_type: str, **kwargs) -> nn.Module:
 
 
 class DiscreteTokenizer(nn.Module):
+    quantizer: Any
+    
+    
     """
     Discrete tokenizer model using ViT architecture.
     Structure: ViT encoder -> quantization -> ViT decoder
@@ -310,7 +313,9 @@ class DiscreteTokenizer(nn.Module):
         quantizer_type: str = 'vq',
         quantizer_kwargs: Optional[Dict[str, Any]] = None,
         use_param_pos_embed: bool = False,
-        pos_embed_grid_size: Union[int, Tuple[int, int]] = 64
+        pos_embed_grid_size: Union[int, Tuple[int, int]] = 64,
+        enable_token_drop: bool = False,
+        token_drop_ratio_range: Tuple[float, float] = (0.0, 0.0),
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -320,6 +325,8 @@ class DiscreteTokenizer(nn.Module):
         self.quantizer_type = quantizer_type
         self.use_param_pos_embed = use_param_pos_embed
         self.pos_embed_grid_size = pos_embed_grid_size
+        self.enable_token_drop = enable_token_drop
+        self.token_drop_ratio_range = token_drop_ratio_range
         
         if quantizer_kwargs is None:
             quantizer_kwargs = {}
@@ -355,6 +362,41 @@ class DiscreteTokenizer(nn.Module):
             dropout=dropout,
             z_channels=z_channels
         )
+
+    def _apply_token_drop(
+        self,
+        quantized: torch.Tensor,
+        valid_mask: Optional[torch.Tensor]
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Randomly drop a suffix of tokens per sample.
+
+        Tokens beyond the kept prefix are zeroed and their valid_mask (if any)
+        is set to False so the decoder attends only to the prefix.
+        """
+        ratio_min, ratio_max = self.token_drop_ratio_range
+        B, C, H, W = quantized.shape
+        T = H * W
+        quant_flat = quantized.permute(0, 2, 3, 1).reshape(B, T, C)
+
+        if valid_mask is None:
+            mask = torch.ones(B, T, device=quantized.device, dtype=torch.bool)
+        else:
+            mask = valid_mask.clone()
+
+        for i in range(B):
+            valid_len = int(mask[i].sum().item())
+
+            drop_ratio = torch.empty(1, device=quantized.device).uniform_(ratio_min, ratio_max).item()
+            drop_tokens = int(valid_len * drop_ratio)
+            if drop_tokens == 0:
+                continue
+
+            keep_len = valid_len - drop_tokens
+            quant_flat[i, keep_len:valid_len, :] = 0.0
+            mask[i, keep_len:valid_len] = False
+
+        quantized = quant_flat.view(B, H, W, C).permute(0, 3, 1, 2)
+        return quantized, mask
     
     def encode(self, x, valid_mask: Optional[torch.Tensor] = None):
         """Encode input to quantized representation.
@@ -412,6 +454,8 @@ class DiscreteTokenizer(nn.Module):
             commit_loss: Commitment loss
         """
         quantized, indices, commit_loss = self.encode(x, valid_mask=valid_mask)
+        if self.enable_token_drop:
+            quantized, valid_mask = self._apply_token_drop(quantized, valid_mask)
         reconstructed = self.decode(quantized, valid_mask=valid_mask)
         
         return reconstructed, indices, commit_loss

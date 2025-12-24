@@ -16,7 +16,7 @@ import torch.utils.data
 import torch.nn as nn
 
 import datasets
-from datasets import Dataset, IterableDataset, load_dataset
+from datasets import Dataset
 from transformers import (
     PreTrainedModel,
     EvalPrediction,
@@ -26,8 +26,6 @@ import sacrebleu
 from transformers.generation.configuration_utils import GenerationConfig
 from trl import SFTTrainer, SFTConfig
 from trl.trainer.utils import ConstantLengthDataset
-
-from utils.lf_utils.protein_tokenizer import DistMatrixTokenizer
 from utils.openfold_utils import OpenfoldProtein
 from utils.lf_utils import (
     ProteinProcessor, 
@@ -35,7 +33,6 @@ from utils.lf_utils import (
     ExtraColumnCollator,
     UnbatchedModalityLogitsProcessorBase,
     DATASET_SPLIT, DATASET_RAW_ROOT,
-    constant,
 )
 
 

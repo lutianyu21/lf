@@ -42,12 +42,11 @@ from transformers.generation.configuration_utils import GenerationConfig
 from trl import SFTTrainer, SFTConfig
 from trl.trainer.utils import ConstantLengthDataset
 
-from utils.lf_utils.protein_tokenizer import DistMatrixTokenizer
 from utils.openfold_utils import OpenfoldProtein
 from utils.lf_utils import (
-    DistMatrixTokenizer,
+    DistMatrixTokenizerV2,
+    DistMatrixTokenizerV3,
     DPLMProteinTokenizer,
-    TextTokenizer,
     ProteinProcessor,
     ExtraColumnCollator,
     UnbatchedModalityLogitsProcessorBase,
@@ -134,8 +133,9 @@ def sft(config: DictConfig):
     # prepare qwen3 tokenizer
     start_time = time.time()
     protein_tokenizer = {
-        "dist": DistMatrixTokenizer,
-        "dplm": DPLMProteinTokenizer,
+        "dist2":    DistMatrixTokenizerV2,
+        "dist3":    DistMatrixTokenizerV3,
+        "dplm":     DPLMProteinTokenizer,
     }[str(config_dataset.type)].get_instance()
     qwen2_tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained(config_lm.model_dir)
     qwen2_tokenizer.padding_side = "right"

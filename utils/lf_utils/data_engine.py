@@ -22,7 +22,7 @@ from ray.util.actor_pool import ActorPool
 from ray.util.queue import Queue
 
 from utils.openfold_utils.io import OpenfoldProtein
-from .protein_tokenizer import DPLMProteinTokenizer, DistMatrixTokenizer
+from .protein_tokenizer import DPLMProteinTokenizer, DistMatrixTokenizerV2, DistMatrixTokenizerV3
 from .protein_processor import ProteinProcessor
 
 
@@ -65,8 +65,9 @@ class GPUWorker:
     def fn(self, batch: List[OpenfoldProtein]):
         if self.processor is None:
             protein_tokenizer = {
-                "dplm": DPLMProteinTokenizer,
-                "dist": DistMatrixTokenizer,
+                "dplm":     DPLMProteinTokenizer,
+                "dist2":    DistMatrixTokenizerV2,
+                "dist3":    DistMatrixTokenizerV3,
             }[self.tokenizer_name].get_instance()
             
             qwen2_tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained('/GenSIvePFS/users/lutianyu/lf/utils/qwen_utils/checkpoints/qwen3/Qwen3-0.6B')
@@ -227,14 +228,17 @@ class DataEngineBase:
         bsz:            int,
         num_consumers:  int,
         num_producers:  int,
-        tokenizer_name: str = "dist",           # dplm / dist tokenizer
-        dataset_name:   str = "unicluster",     # will be mapped to feature['split]
+        tokenizer_name: str = "dist",               # dplm / dist tokenizer
+        dataset_name:   str = "p2s/unicluster",     # will be mapped to feature['split']
     ):
         # should prepare following files:
         # - pickle_dir/*.pkl
         # - bq.parquet
         # generated:
         # - parquet_dir/parquet/shard_*.parquet
+        # - parquet_dir/parquet/dataset.parquet
+        # - parquet_dir/parquet/train.parquet
+        # - parquet_dir/parquet/eval.parquet
         
         parquet_dir = parquet_dir / 'parquet'
         parquet_dir.mkdir(parents=True, exist_ok=True)
@@ -342,6 +346,7 @@ class DataEngineBase:
         
         # merege all parquet shards (remove original shards?)
         logger.info("Merging all parquet shards ...")
+        time_start = time.time()
         all_tables = []
         for shard_path in sorted(parquet_dir.glob("shard_*.parquet")):
             table = pyarrow.parquet.read_table(shard_path) # type: ignore
@@ -349,7 +354,27 @@ class DataEngineBase:
         merged_table = pyarrow.concat_tables(all_tables)
         merged_path = parquet_dir / "dataset.parquet"
         pyarrow.parquet.write_table(merged_table, merged_path, compression="snappy") # type: ignore
-        logger.info(f"Merged parquet saved to {merged_path} with {merged_table.num_rows} entries.")
+        logger.info(f"[{int(time.time() - time_start)}s] Merged parquet saved to {merged_path} with {merged_table.num_rows} entries.")
+        
+        # shuffle merged parquet & random split into train/eval(4%)
+        logger.info("Shuffling and splitting merged parquet ...")
+        time_start = time.time()
+        df_merged = merged_table.to_pandas()
+        df_shuffled = df_merged.sample(frac=1.0, random_state=2025).reset_index(drop=True)
+        num_eval = int(len(df_shuffled) * 0.04)
+        df_eval = df_shuffled.iloc[0:num_eval]
+        df_train = df_shuffled.iloc[num_eval:]
+        train_path = parquet_dir / "train.parquet"
+        eval_path = parquet_dir / "eval.parquet"
+        df_train.to_parquet(train_path, index=False)
+        df_eval.to_parquet(eval_path, index=False)
+        logger.info(f"[{int(time.time() - time_start)}s] Train parquet saved to {train_path} with {len(df_train)} entries.")
+        logger.info(f"[{int(time.time() - time_start)}s] Eval parquet saved to {eval_path} with {len(df_eval)} entries.")
+        
+
+
+
+
 
 
 class DataEngineRCSB(DataEngineBase):
@@ -448,6 +473,9 @@ class DataEngineRCSB(DataEngineBase):
         bq_path = output_dir / "bq.parquet"
         bq_df.to_parquet(bq_path, index=False)
         logger.info(f"Saved bigtable to {bq_path} with {len(bq_df)} entries.")
+        
+        
+
 
 
         

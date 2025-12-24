@@ -1,4 +1,4 @@
-type: dist
+type: dist2
 
 train:
   # - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/sequence/uniref50/train.parquet

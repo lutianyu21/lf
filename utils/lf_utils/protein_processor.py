@@ -12,7 +12,6 @@ import transformers
 from transformers import ProcessorMixin
 from transformers.feature_extraction_utils import BatchFeature
 
-from .text_tokenizer import TextTokenizer
 from .protein_tokenizer import ProteinTokenizer
 from ..openfold_utils.io import OpenfoldProtein
 
@@ -182,13 +181,12 @@ class ProteinProcessor(ProcessorMixin):
             text = f"<seq> {seq_text}</seq><struct>{struct_text}</struct>"
             prompt = f"<seq> {seq_text}</seq><struct>"
             results.append({
-                "pdb_name": protein.entry,
-                "plddt": protein.plddt,
-                "text": text,
-                "prompt": prompt,
-                "seq_length": seq_length,
-                "struct_length": struct_length,
-                "split": dataset_name,
+                "split":            dataset_name,
+                "pdb_name":         protein.entry,
+                "plddt":            protein.plddt,
+                "text":             text,
+                "seq_length":       seq_length,
+                "struct_length":    struct_length,
             })
         return results
         
