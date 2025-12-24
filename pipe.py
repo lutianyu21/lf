@@ -42,7 +42,6 @@ from transformers.generation.configuration_utils import GenerationConfig
 from trl import SFTTrainer, SFTConfig
 from trl.trainer.utils import ConstantLengthDataset
 
-from utils.openfold_utils import OpenfoldProtein
 from utils.lf_utils import (
     DistMatrixTokenizerV2,
     DistMatrixTokenizerV3,
@@ -52,7 +51,6 @@ from utils.lf_utils import (
     UnbatchedModalityLogitsProcessorBase,
     DATASET_SPLIT, DATASET_RAW_ROOT,
     PackingFoldingTrainer,
-    dataset,
 )
 
 # log color whenrank=0 & silent when rank>0
@@ -98,12 +96,14 @@ def sft(config: DictConfig):
         "struct_length":    Value("int64"),
     })
     
-    def make_perpetual(ds):
+    def make_perpetual(ds, base_seed: int = 2025, buffer_size: int = 10000):
         def gen():
             epoch = 0
             while True:
                 ds.set_epoch(epoch)
-                for ex in ds:
+                # - pseudo random shuffle with epoch-dependent seed
+                shuffled = ds.shuffle(buffer_size=buffer_size, seed=base_seed + epoch)
+                for ex in shuffled:
                     yield ex
                 epoch += 1
         return IterableDataset.from_generator(gen, features=ds.features)
