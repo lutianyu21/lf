@@ -116,13 +116,12 @@ def sft(config: DictConfig):
         ds = ds.select(range(min(1000, len(ds)))) # type: ignore
         dataset_eval_small.append(ds)
     dataset_eval = datasets.concatenate_datasets(dataset_eval_small)
-    
     dataset_train = interleave_datasets(
         datasets=[
             make_perpetual(
-                load_dataset('parquet', streaming=True, split='train', data_files=fpath, features=features).shuffle(seed=2025)
+                load_dataset('parquet', streaming=True, split='train', data_files=fpath, features=features)
             )
-            for fpath in config_dataset.train
+            for i, fpath in enumerate(config_dataset.train)
         ],    
         probabilities=config_dataset.weight,
         seed=2025,

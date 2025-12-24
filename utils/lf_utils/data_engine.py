@@ -13,7 +13,6 @@ import colorlog
 import logging
 import pandas as pd
 import numpy as np
-from regex import D
 import torch
 from transformers import AutoTokenizer, Qwen2TokenizerFast
 
@@ -228,8 +227,8 @@ class DataEngineBase:
         bsz:            int,
         num_consumers:  int,
         num_producers:  int,
-        tokenizer_name: str = "dist",               # dplm / dist tokenizer
-        dataset_name:   str = "p2s/unicluster",     # will be mapped to feature['split']
+        tokenizer_name: str = "dist2",                  # dplm / dist tokenizer
+        dataset_name:   str = "p2s/unicluster40",       # will be mapped to feature['split']
     ):
         # should prepare following files:
         # - pickle_dir/*.pkl
