@@ -74,7 +74,7 @@ class ExtraColumnCollator:
         ## masking fn ## (not required for evaluation, only for training)
         
         ## concatenation fn ##
-        if organized_batch['split'][0] in ['p2s/unicluster40', 'p2s/afdb_swissprot', 'p2s/rcsb', 'cameo2022', 'casp15', 'casp16', 'dev'] and self._concatenation:
+        if organized_batch['split'][0] in ['p2s/unicluster40', 'p2s/afdb_swissprot', 'p2s/rcsb'] and self._concatenation:
             # before: <seq>....</seq><struct>....</struct>
             # after:  <seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
             M, ratio, tmp = self._concatenation_size, self._concatenation_ratio, []
