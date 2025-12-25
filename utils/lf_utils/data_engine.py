@@ -229,6 +229,7 @@ class DataEngineBase:
         num_producers:  int,
         tokenizer_name: str = "dist2",                  # dplm / dist tokenizer
         dataset_name:   str = "p2s/unicluster40",       # will be mapped to feature['split']
+        merge_shards:   bool = True,
     ):
         # should prepare following files:
         # - pickle_dir/*.pkl
@@ -342,6 +343,8 @@ class DataEngineBase:
         if parquet_writer is not None:
             parquet_writer.close()
         logger.info(f"All batches are processed and saved to {parquet_dir}")
+        
+        if not merge_shards: return
         
         # merege all parquet shards (remove original shards?)
         logger.info("Merging all parquet shards ...")

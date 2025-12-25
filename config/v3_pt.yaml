@@ -1,0 +1,13 @@
+defaults:
+  - dataset: dist3
+  - lm: qwen3
+  - trainer: sft
+  - _self_
+
+# overwrite experiment config
+name: qwen3-0.6B-dist3@pt
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

@@ -118,12 +118,13 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
         iterator = iter(self.dataset)
         more_examples = True
         while more_examples:
-            buffer, buffer_len = [], 0
+            metabuffer, buffer, buffer_len = [], [], 0
             while True:
                 if buffer_len >= self.max_buffer_size:
                     break
                 try:
                     tmp = next(iterator)
+                    metabuffer.append(tmp['split'])
                     buffer.append(self.formatting_func(tmp))
                     buffer_len += len(buffer[-1])
                 except StopIteration:
@@ -133,22 +134,27 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                     else:
                         more_examples = False
                         break
-                
-            # for items in buffer, apply cropping & masking if needed
+            
+            # NOTE that input_ids can not determine the dataset type here
+            # apply more complex formatting on the buffer according to different dataset splits
             feature = {
                 'input_ids':    [],
                 'labels':       [],
             }
-            for it in buffer:
+            for it, split in zip(buffer, metabuffer):
                 f = self.tokenizer(it, add_special_tokens=self.add_special_tokens, truncation=False, text_target=it)
-                if self._cropping:
+                if split in ['p/uniref50'] and self._cropping:
                     f = self._apply_cropping(f)
-                if self._concatenation:
+                if split in ['psps/unicluster40'] and self._concatenation:
+                    # HINT synthesize denoising data by concatenation
+                    # TODO remove after collecting real interleaved data
                     f = self._apply_concatenation(f)
-                if self._masking:
+                if split in ['p2s/unicluster40', 'psps/unicluster40'] and self._masking:
+                    # HINT sft by masking prompt region
                     f = self._apply_masking(f)
                 feature['input_ids'].append(f['input_ids'])
                 feature['labels'].append(f['labels'])
+            del metabuffer        
             
             # Original Implementation:
             # |-----d1-----|----d2----|---d3--
@@ -196,29 +202,15 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
                     "input_ids": torch.LongTensor(input_ids),
                     "labels": torch.LongTensor(labels),
                 }
-                
-                
-    def _is_sequence_dataset(self, feature: Dict[str, List[int]]) -> bool:
-        return  feature['input_ids'][0]  == self.tokenizer.boseq_token_id \
-            and feature['input_ids'][-1] == self.tokenizer.eoseq_token_id
-    
-    def _is_structure_dataset(self, feature: Dict[str, List[int]]) -> bool:
-        return  feature['input_ids'][0]  == self.tokenizer.bostruct_token_id \
-            and feature['input_ids'][-1] == self.tokenizer.eostruct_token_id
-            
-    def _is_folding_dataset(self, feature: Dict[str, List[int]]) -> bool:
-        return not self._is_sequence_dataset(feature) and not self._is_structure_dataset(feature)        
-    
     
     # Reference:
     # - (dplm) https://arxiv.org/pdf/2402.18567
     def _apply_cropping(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
         # genetic sequences are usually longer than the model max_length
-        if not self._is_sequence_dataset(feature):
-            return feature
-        
         if (L := len(feature['input_ids'])) <= 1 + self._cropping_size + 1:
             return feature
+        seq_start = feature['input_ids'].index(self.tokenizer.boseq_token_id)
+        seq_end   = feature['input_ids'].index(self.tokenizer.eoseq_token_id)
         cropping_start = random.randint(1, L - self._cropping_size - 1)
         feature['input_ids'] = feature['input_ids'][:1] \
                              + feature['input_ids'][cropping_start : cropping_start + self._cropping_size] \
@@ -227,11 +219,8 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
         return feature
     
     # Reference:
-    # - (poet) 
+    # - (poet) https://arxiv.org/abs/2306.06156
     def _apply_concatenation(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
-        if not self._is_folding_dataset(feature):
-            return feature
-        
         # repeat M times & replcae ratio(%) structure tokens with random structure tokens:
         # <seq>....</seq><struct>....</struct>
         # <seq>....</seq><struct>....</struct> | <seq>....</seq><struct>....</struct> | ...
@@ -257,8 +246,6 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
     # Reference:
     # - (I2T, T2I)
     def _apply_masking(self, feature: Dict[str, List[int]]) -> Dict[str, List[int]]:
-        if not self._is_folding_dataset(feature):
-            return feature
         # do not compute loss on prompt region:
         # <seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
         # -100 .... -100 .... -100 .... -100 .... -100 ....  <struct>....</struct>
@@ -271,6 +258,7 @@ class ItemwiseConstantLengthDataset(ConstantLengthDataset):
         feature['labels'] = tmp
         return feature
     
+
 
 class TextCollator:
     # handle pure-text dataset
