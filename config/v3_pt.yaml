@@ -5,7 +5,14 @@ defaults:
   - _self_
 
 # overwrite experiment config
-name: qwen3-0.6B-dist3@pt
+name: qwen3-0.6B-dist3@pt@ablation
+
+dataset:
+  processing:
+    cropping:             True
+    masking:              True
+    concatenation:        False
+    concatenation_ratio:  0.0
 
 hydra:
   output_subdir: null
