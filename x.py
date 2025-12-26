@@ -20,17 +20,31 @@ from pathlib import Path
 #     shard_id=0,
 # )
 
+# DataEngineBase().parquet(
+#     bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/casp16/bq.parquet"),
+#     pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/casp16/pickle"),
+#     parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/v3"),
+#     bsz=100,
+#     num_consumers=1,
+#     num_producers=10,
+#     tokenizer_name="dist3",
+#     dataset_name="casp16",
+#     merge_shards=False
+# )
+
+
 DataEngineBase().parquet(
-    bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/casp16/bq.parquet"),
-    pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/casp16/pickle"),
-    parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/v3"),
+    bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster40/bq.parquet"),
+    pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster40/pickle"),
+    parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster40/v3-0"),
     bsz=100,
-    num_consumers=1,
+    num_consumers=8,
     num_producers=10,
     tokenizer_name="dist3",
-    dataset_name="casp16",
+    dataset_name="p2s/unicluster40",
     merge_shards=False
 )
+
 
 
 
