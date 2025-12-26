@@ -1,5 +1,5 @@
 defaults:
-  - dataset: dist3
+  - dataset: dist3-0
   - lm: qwen3
   - trainer: sft
   - _self_
