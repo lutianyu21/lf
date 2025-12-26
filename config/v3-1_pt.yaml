@@ -5,12 +5,12 @@ defaults:
   - _self_
 
 # overwrite experiment config
-name: qwen3-0.6B-dist3@pt@ablation
+name: qwen3-0.6B-dist3-1@pt
 
 dataset:
   processing:
     cropping:             True
-    masking:              True
+    masking:              False
     concatenation:        False
     concatenation_ratio:  0.0
 

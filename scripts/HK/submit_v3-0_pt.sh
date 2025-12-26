@@ -118,7 +118,7 @@ conda run -n qwen3 torchrun \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     --node_rank=$SLURM_NODEID \
-    pipe.py --config-name='v3_pt.yaml'
+    pipe.py --config-name='v3-0_pt.yaml'
 
 echo "=== torchrun command executed ==="
 EOF
