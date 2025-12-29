@@ -23,6 +23,7 @@ from ray.util.queue import Queue
 from utils.openfold_utils.io import OpenfoldProtein
 from .protein_tokenizer import DPLMProteinTokenizer, DistMatrixTokenizerV2, DistMatrixTokenizerV3
 from .protein_processor import ProteinProcessor
+from .constant import LF_ROOT, LF_DATA_ROOT, LF_MODEL_ROOT
 
 
 __all__ = ['DataEngineBase', 'DataEngineRCSB']
@@ -69,7 +70,7 @@ class GPUWorker:
                 "dist3":    DistMatrixTokenizerV3,
             }[self.tokenizer_name].get_instance()
             
-            qwen2_tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained('/GenSIvePFS/users/lutianyu/lf/utils/qwen_utils/checkpoints/qwen3/Qwen3-0.6B')
+            qwen2_tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained(str(LF_MODEL_ROOT / 'Qwen3-0.6B'))
             qwen2_tokenizer.padding_side = "right"
             qwen2_tokenizer.truncation_side = "right"
             qwen2_tokenizer.boseq_token = '<seq>'
@@ -413,7 +414,7 @@ class DataEngineRCSB(DataEngineBase):
                         query_set.add(item)
                         
         # determinitic: uniprotAccession O(1)
-        RCSB = Path("/GenSIvePFS/users/lutianyu/lf/data/rcsb/raw")
+        RCSB = LF_DATA_ROOT / "rcsb/raw"
         hit_count, futures, failures = 0, [], []
         for q in query_set:
             # Optional, pickle or not

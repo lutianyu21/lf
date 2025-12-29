@@ -242,10 +242,8 @@ class PackingFoldingTrainer(SFTTrainer):
         num_items_in_batch: Optional[torch.Tensor] = None,
     ):
         
-        # decode inputs['input_ids'] for debugging
-        logger.info(self.processor.tokenizer.decode(inputs['input_ids'][0].cpu().tolist()))
-        logger.info(self.processor.tokenizer.decode(inputs['input_ids'][1].cpu().tolist()))
-        logger.info(self.processor.tokenizer.decode(inputs['input_ids'][2].cpu().tolist()))
+        # decode inputs['input_ids'] for debugging (only first sample)
+        # logger.info(self.processor.tokenizer.decode(inputs['input_ids'][0].cpu().tolist()))
         
         
         
