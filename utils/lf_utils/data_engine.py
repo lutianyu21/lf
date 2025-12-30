@@ -1,32 +1,22 @@
-import random
 import time
-from typing import Iterator, Optional, Tuple, Any, List
+from typing import List
 import pyarrow
 import ray
-import re
-import os
 from pathlib import Path
-import tarfile
-import shutil
-import pickle
 import colorlog
 import logging
 import pandas as pd
-import numpy as np
 import torch
 from transformers import AutoTokenizer, Qwen2TokenizerFast
 
-import ray
-from ray.util.actor_pool import ActorPool
 from ray.util.queue import Queue
 
 from utils.openfold_utils.io import OpenfoldProtein
 from .protein_tokenizer import DPLMProteinTokenizer, DistMatrixTokenizerV2, DistMatrixTokenizerV3
 from .protein_processor import ProteinProcessor
-from .constant import LF_ROOT, LF_DATA_ROOT, LF_MODEL_ROOT
 
 
-__all__ = ['DataEngineBase', 'DataEngineRCSB']
+__all__ = ['DataEngine']
 
 
 logger = logging.getLogger(__name__)
@@ -50,8 +40,7 @@ logger.propagate = False
 
 @ray.remote(num_gpus=1)
 class GPUWorker:
-    def __init__(self, dataset_name: str, tokenizer_name: str):
-        from .protein_processor import ProteinProcessor
+    def __init__(self, dataset_name: str, tokenizer_name: str, tokenizer_ckpt: str, structure_ckpt: str, qwen_tokenizer_path: str):
         gpu_ids = ray.get_gpu_ids()
         if not gpu_ids:
             raise RuntimeError("No GPU assigned to this actor")
@@ -59,18 +48,34 @@ class GPUWorker:
         # lazy initilaize
         self.dataset_name = dataset_name
         self.tokenizer_name = tokenizer_name
+        self.tokenizer_ckpt = tokenizer_ckpt
+        self.structure_ckpt = structure_ckpt
+        self.qwen_tokenizer_path = qwen_tokenizer_path
         self.processor = None
 
     @torch.no_grad()
     def fn(self, batch: List[OpenfoldProtein]):
         if self.processor is None:
-            protein_tokenizer = {
-                "dplm":     DPLMProteinTokenizer,
-                "dist2":    DistMatrixTokenizerV2,
-                "dist3":    DistMatrixTokenizerV3,
-            }[self.tokenizer_name].get_instance()
+            if self.tokenizer_name == "dplm":
+                protein_tokenizer = DPLMProteinTokenizer.get_instance()
+            elif self.tokenizer_name == "dist2":
+                protein_tokenizer = DistMatrixTokenizerV2(
+                    tokenizer_ckpt_path=self.tokenizer_ckpt,
+                    structure_ckpt_path=self.structure_ckpt,
+                    map_location="cpu",
+                )
+            elif self.tokenizer_name == "dist3":
+                protein_tokenizer = DistMatrixTokenizerV3(
+                    tokenizer_ckpt_path=self.tokenizer_ckpt,
+                    structure_ckpt_path=self.structure_ckpt,
+                    map_location="cpu",
+                )
+            else:
+                raise ValueError(f"Unknown tokenizer_name: {self.tokenizer_name}")
             
-            qwen2_tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained(str(LF_MODEL_ROOT / 'Qwen3-0.6B'))
+            qwen2_tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained(
+                self.qwen_tokenizer_path
+            )
             qwen2_tokenizer.padding_side = "right"
             qwen2_tokenizer.truncation_side = "right"
             qwen2_tokenizer.boseq_token = '<seq>'
@@ -100,183 +105,112 @@ class GPUWorker:
             self.processor = protein_processor.to(self.device)
         return self.processor.preprocess_dataset(self.dataset_name,batch, verbose=False)
 
-
 @ray.remote
-class PickleWorker:
-    # n producers reading pickles from disk
-    def __init__(self, pickle_dir: str, bq: pd.DataFrame, bsz: int): 
-        self.pickle_dir = Path(pickle_dir)
-        self.bq = bq
+class RawFileWorker:
+    def __init__(self, df: pd.DataFrame, structure_dir: Path, bsz: int):
+        self.bq = df
+        self.structure_dir = Path(structure_dir)
         self.bsz = bsz
-    
-    def fn(self, out_queue: Queue):
+
+    def _find_structure_file(self, accession: str) -> Path:
+        """查找蛋白质结构文件，支持多种格式和命名规则"""
+        accession_variants = [
+            accession,
+            accession.replace('@', '-'),
+            accession.replace('@', '_'),
+        ]
+        for acc in accession_variants:
+            for suffix in ['.cif.gz', '.cif', '.pdb.gz', '.pdb']:
+                path = self.structure_dir / f'{acc}{suffix}'
+                if path.exists():
+                    return path
+        raise FileNotFoundError(f'Cannot find structure file for: {accession} in {self.structure_dir}')
+
+    def fn(self, queue: Queue):
         batch = []
-        # instead of scanning all files(unstable order), 
-        # we scan bq.parquet to ensure deterministic processing
         for _, row in self.bq.iterrows():
-            pickle_file = self.pickle_dir / row['picklePath']
-            try:
-                with open(pickle_file, "rb") as f:
-                    obj = pickle.load(f)
-                if len(obj) > 1024:
-                    continue
-                else:
-                    batch.append(obj)
-                    if len(batch) >= self.bsz:
-                        out_queue.put(batch)
-                        batch = []
-            except Exception as e:
-                logger.error(f"Failed to read {pickle_file}: {e}")
-                
-        if batch: out_queue.put(batch)
-        out_queue.put(None)  # signal done
+            path = self._find_structure_file(row['unirefAccession'])
+            protein = OpenfoldProtein.from_file(path)
+            batch.append(protein)
+            if len(batch) >= self.bsz:
+                queue.put(batch)
+                batch = []
+        if batch:
+            queue.put(batch)
+        queue.put(None)  # signal done
 
 
-
-@ray.remote
-def extract2target(
-    iter: Any,
-    output_dir: Path,
-    pickle_dir: Optional[Path],
-):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if pickle_dir is not None:
-        pickle_dir.mkdir(parents=True, exist_ok=True)
-    
-    # for different dataset, iter can be different types
-    # AFDB: iter = (tar_path, member_name)
-    # RCSB: iter = (path)
-    try:
-        if isinstance(iter, tuple):
-            tar_path, member_name = iter
-            with tarfile.open(tar_path, "r") as tf:
-                member = tf.getmember(member_name)
-                f = tf.extractfile(member)
-                if f is None:
-                    return ("failed", member_name, "Extracted file is None")
-            target_path = output_dir / Path(member.name).name
-            if target_path.exists():
-                return ("skipped", member_name)
-            with open(target_path, "wb") as out_f:
-                shutil.copyfileobj(f, out_f)
-            # one can chooose to save as text/pickle
-            if pickle_dir is not None:
-                pickle_dir.mkdir(parents=True, exist_ok=True)
-                protein = OpenfoldProtein.from_file(target_path)
-                pickle_path = pickle_dir / (protein.entry + ".pkl")
-                with pickle_path.open("wb") as f:
-                    pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
-            return ("success", member_name)
-        
-        else:
-            # 1ema%1.cif | 1ema.cif.gz
-            uniref_accession_extended = iter.name.removesuffix('.gz').removesuffix('.cif')
-            uniref_accession = uniref_accession_extended[0:4]
-            src_path = iter.parent / (uniref_accession + ''.join(iter.suffixes))
-            dst_path = output_dir  / (uniref_accession_extended + ''.join(iter.suffixes))
-            if dst_path.exists():
-                # FIX bug, re-pickle even if cif exists
-                if pickle_dir is not None:
-                    protein = OpenfoldProtein.from_file(iter)
-                    pickle_path = pickle_dir / (protein.entry + ".pkl")
-                    with pickle_path.open("wb") as f:
-                        pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
-                    return ("success", uniref_accession_extended)
-                else:
-                    return ("skipped", uniref_accession_extended)
-            else:
-                shutil.copyfile(src_path, dst_path)
-                if pickle_dir is not None:
-                    protein = OpenfoldProtein.from_file(iter)
-                    pickle_path = pickle_dir / (protein.entry + ".pkl")
-                    with pickle_path.open("wb") as f:
-                        pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
-                return ("success", uniref_accession_extended)
-    except Exception as e:
-        return ("failed", iter, str(e))
-    
-    
-    
-
-@ray.remote
-def task_cif2pickle(cif_path: Path, pickle_path: Path):
-    # convert .cif.gz to .pickle
-    try:
-        if pickle_path.exists():
-            return ("skipped", cif_path.name)
-        protein = OpenfoldProtein.from_file(cif_path)
-        with pickle_path.open("wb") as f:
-            pickle.dump(protein, f, protocol=pickle.HIGHEST_PROTOCOL)
-        return ("success", cif_path.name)
-    except Exception as e:
-        return ("failed", cif_path.name, str(e))
-
-    
-    
-    
-
-
-class DataEngineBase:
+class DataEngine:
     
     ### process functions ###
     @classmethod
-    def parquet(
+    def pipe(
         cls,
+        dataset_dir:    Path,
         bq_path:        Path,
-        pickle_dir:     Path,
-        parquet_dir:    Path,
+        structure_dir:  Path,                           # 蛋白质结构文件目录
         bsz:            int,
         num_consumers:  int,
         num_producers:  int,
-        tokenizer_name: str = "dist2",                  # dplm / dist tokenizer
+        tokenizer_name: str = "dist3",                  # dplm / dist2 / dist3
+        tokenizer_ckpt: str = "",                       # discrete tokenizer checkpoint path
+        structure_ckpt: str = "",                       # structure head checkpoint path
+        qwen_tokenizer_path: str = "/SPXvePFS/model/Qwen3-0.6B",  # qwen tokenizer path
         dataset_name:   str = "p2s/unicluster40",       # will be mapped to feature['split']
-        merge_shards:   bool = True,
+        ops:            List[str] = ['merge', 'shuffle', 'split'],
     ):
-        # should prepare following files:
-        # - pickle_dir/*.pkl
-        # - bq.parquet
-        # generated:
-        # - parquet_dir/parquet/shard_*.parquet
-        # - parquet_dir/parquet/dataset.parquet
-        # - parquet_dir/parquet/train.parquet
-        # - parquet_dir/parquet/eval.parquet
-        
-        parquet_dir = parquet_dir / 'parquet'
-        parquet_dir.mkdir(parents=True, exist_ok=True)
-        
-        # load and split bq.parquet, each producer will handle a subset
+        # load bigtable
+        time_start = time.time()
         logger.info(f"Loading bigtable from {bq_path} ...")
         bq_df = pd.read_parquet(bq_path)
         num_items_total = len(bq_df)
         num_items_producer = (num_items_total + num_producers - 1) // num_producers
+        logger.info(f"{int(time.time() - time_start)}s Loaded bigtable with {num_items_total} items.")
+        time_start = time.time()
         
-        # n producer x m consumer pattern
+        # n producer x m consumer system
+        # load and split bq.parquet, each producer will handle a subset
         logger.info(f"Starting {num_producers} producers x {num_consumers} consumers ...")
         queue = Queue(1000)
         producers = [
-            PickleWorker.remote(str(pickle_dir), bq_df[
+            RawFileWorker.remote(bq_df[
                 i * num_items_producer : min((i + 1) * num_items_producer, len(bq_df))
-            ], bsz) for i in range(num_producers)
+            ], structure_dir, bsz) for i in range(num_producers)
         ]
         num_consumers_max = num_consumers - 1
         num_producers_done = 0
         consumers = [
-            GPUWorker.remote(dataset_name, tokenizer_name) for _ in range(num_consumers)
+            GPUWorker.remote(dataset_name, tokenizer_name, tokenizer_ckpt, structure_ckpt, qwen_tokenizer_path) for _ in range(num_consumers)
         ]
         
-        # starting produsers first
-        for w in producers:
-            w.fn.remote(queue)  # type: ignore
+        # prepare directory
+        tmp_dir = dataset_dir / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        category, name = dataset_name.split('/')[0], dataset_name.split('/')[-1]
+        final_dir = dataset_dir / {
+            'p2s':          'folding',
+            'psps':         'cfolding',
+        }[category] / {
+            'unicluster40': 'unicluster40',
+            'cameo22':    'benchmark',
+            'casp15':       'benchmark',
+            'casp16':       'benchmark',
+        }[name]
+        final_dir.mkdir(parents=True, exist_ok=True)
         
-        # consumption loop
+        # start producers first
+        for w in producers: w.fn.remote(queue)  # type: ignore
+        logger.info(f"[{int(time.time() - time_start)}s] All producers started.")
+        time_start = time.time()
+        
+        # start consumption loop
         time_start = time.time()
         writer_checkpoint_frequency = 100000
         writer_checkpoint_buffer = 0
         writer_checkpoint_cnt = 0
         parquet_writer, bid, pending_refs = None, 0, []
+        # loop until all producers are done
         while True:
-            
-            # loop until all producers are done
             batch = queue.get()
             if batch is None:
                 num_producers_done += 1
@@ -292,15 +226,14 @@ class DataEngineBase:
             if len(pending_refs) >= num_consumers_max:
                 ready, pending_refs = ray.wait(pending_refs, num_returns=1)
                 result = ray.get(ready[0])
-                elapsed = time.time() - time_start
+                logger.info(f"[{int(time.time() - time_start)}s] Processed [{len(result)}] items (pending={len(pending_refs)})")
                 time_start = time.time()
-                logger.info(f"[{int(elapsed)}s] Processed [{len(result)}] items (pending={len(pending_refs)})")
 
                 # write to parquet
                 table = pyarrow.Table.from_pylist(result)
                 if parquet_writer is None:
                     parquet_writer = pyarrow.parquet.ParquetWriter( # type: ignore
-                        str(parquet_dir / f"shard_{writer_checkpoint_cnt}.parquet"),
+                        str(tmp_dir / f"shard_{writer_checkpoint_cnt}.parquet"),
                         table.schema,
                         compression="snappy"
                     )
@@ -319,15 +252,14 @@ class DataEngineBase:
         while pending_refs:
             ready, pending_refs = ray.wait(pending_refs, num_returns=1)
             result = ray.get(ready[0])
-            elapsed = time.time() - time_start
+            logger.info(f"[{int(time.time() - time_start)}s] Processed [{len(result)}] items (pending={len(pending_refs)})")
             time_start = time.time()
-            logger.info(f"[{int(elapsed)}s] Processed [{len(result)}] items (pending={len(pending_refs)})")
             
             # write to parquet
             table = pyarrow.Table.from_pylist(result)
             if parquet_writer is None:
                 parquet_writer = pyarrow.parquet.ParquetWriter( # type: ignore
-                    str(parquet_dir / f"shard_{writer_checkpoint_cnt}.parquet"),
+                    str(tmp_dir / f"shard_{writer_checkpoint_cnt}.parquet"),
                     table.schema,
                     compression="snappy"
                 )
@@ -343,322 +275,38 @@ class DataEngineBase:
         
         if parquet_writer is not None:
             parquet_writer.close()
-        logger.info(f"All batches are processed and saved to {parquet_dir}")
+        logger.info(f"All batches are processed and saved to {tmp_dir}")
         
-        if not merge_shards: return
-        
-        # merege all parquet shards (remove original shards?)
-        logger.info("Merging all parquet shards ...")
-        time_start = time.time()
+        # operation list:
+        # ['merge', 'shuffle', 'split', 'extract', 'clean']
+        if not 'merge' in ops: return
+        logger.info("Merging parquet shards ...")
         all_tables = []
-        for shard_path in sorted(parquet_dir.glob("shard_*.parquet")):
+        for shard_path in sorted(tmp_dir.glob("shard_*.parquet")):
             table = pyarrow.parquet.read_table(shard_path) # type: ignore
             all_tables.append(table)
         merged_table = pyarrow.concat_tables(all_tables)
-        merged_path = parquet_dir / "dataset.parquet"
+        merged_path = final_dir / f"{name}.parquet"
         pyarrow.parquet.write_table(merged_table, merged_path, compression="snappy") # type: ignore
         logger.info(f"[{int(time.time() - time_start)}s] Merged parquet saved to {merged_path} with {merged_table.num_rows} entries.")
-        
-        # shuffle merged parquet & random split into train/eval(4%)
-        logger.info("Shuffling and splitting merged parquet ...")
         time_start = time.time()
+        
+        if not 'shuffle' in ops: return
+        logger.info("Shuffling and splitting merged parquet ...")
         df_merged = merged_table.to_pandas()
         df_shuffled = df_merged.sample(frac=1.0, random_state=2025).reset_index(drop=True)
+        df_shuffled.to_parquet(merged_path, index=False)
+        logger.info(f"[{int(time.time() - time_start)}s] Shuffled parquet saved to {merged_path} with {len(df_shuffled)} entries.")
+        time_start = time.time()
+        
+        if not 'split' in ops: return
         num_eval = int(len(df_shuffled) * 0.04)
-        df_eval = df_shuffled.iloc[0:num_eval]
         df_train = df_shuffled.iloc[num_eval:]
-        train_path = parquet_dir / "train.parquet"
-        eval_path = parquet_dir / "eval.parquet"
+        df_eval = df_shuffled.iloc[0:num_eval]
+        train_path = final_dir / "train.parquet"
+        eval_path = final_dir / "eval.parquet"
         df_train.to_parquet(train_path, index=False)
         df_eval.to_parquet(eval_path, index=False)
         logger.info(f"[{int(time.time() - time_start)}s] Train parquet saved to {train_path} with {len(df_train)} entries.")
         logger.info(f"[{int(time.time() - time_start)}s] Eval parquet saved to {eval_path} with {len(df_eval)} entries.")
-        
-
-
-
-
-
-
-class DataEngineRCSB(DataEngineBase):
-    
-    @classmethod
-    def scan(cls):
-        raise NotImplementedError()
-    
-    @classmethod
-    def query(
-        cls,
-        query_path: Path,           # a .txt file containing list of rcsb PDB ids 
-        output_dir: Path,
-        max_concurrent: int = 100,
-    ):
-        if not query_path.name.endswith('.txt'): raise NotImplementedError()
-        rawfile_dir = output_dir / "raw"
-        pickle_dir = output_dir / "pickle"
-        rawfile_dir.mkdir(parents=True, exist_ok=True)
-        pickle_dir.mkdir(parents=True, exist_ok=True)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # unicluster query: 1ema_1 2hbb_3 ... (should be %)
-        # cameo query:      1ema@A 2hbb@B ...
-        query_set = set()
-        with open(query_path, 'r') as f:
-            for line in f:
-                for item in line.strip().split():
-                    if item.startswith('AF') or item.startswith('MA'):
-                        continue
-                    else:
-                        item = item.replace('_', '%')
-                        item = item.lower()[0:4] + item[4:]
-                        query_set.add(item)
-                        
-        # determinitic: uniprotAccession O(1)
-        RCSB = LF_DATA_ROOT / "rcsb/raw"
-        hit_count, futures, failures = 0, [], []
-        for q in query_set:
-            # Optional, pickle or not
-            futures.append(extract2target.remote(RCSB / f'{q}.cif', rawfile_dir, pickle_dir))
-            # reduce memory pressure
-            if len(futures) >= max_concurrent:
-                done, futures = ray.wait(futures, num_returns=1)
-                done_results = ray.get(done)
-                for res in done_results:
-                    status = res[0]
-                    if status == "success":
-                        hit_count += 1
-                        logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
-                    elif status == "skipped":
-                        hit_count += 1
-                        logger.warning(f"[{hit_count}/{len(query_set)}] Skipped: {res[1]}")
-                    elif status == "failed":
-                        failures.append(res[1])
-                        logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
-        
-        # collecting remaining futures
-        while futures:
-            done, futures = ray.wait(futures)
-            done_results = ray.get(done)
-            for res in done_results:
-                status = res[0]
-                if status == "success":
-                    hit_count += 1
-                    logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
-                elif status == "skipped":
-                    hit_count += 1
-                    logger.warning(f"[{hit_count}/{len(query_set)}] Skipped (exists): {res[1]}")
-                elif status == "failed":
-                    failures.append(res[1])
-                    logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
-        
-        # HINT: in current design, we can only ensure that all [existed/queried] items are processed
-        failures_file = output_dir / "failures.txt"
-        if failures_file.exists(): failures_file.unlink()
-        if failures:
-            with open(failures_file, "w") as f:
-                for item in failures:
-                    f.write(f"{item}\n")
-            logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
-        logger.info(f"All tasks completed. Total queried: {hit_count}/{len(query_set)}")
-        
-        # query_set - failures = processed, prepare a bq.parquet for next step
-        # {"unirefAccession":"8g38","unirefAccessionExtended":"8g38%4","picklePath":"8g38%4.pkl","cifPath":"8g38%4.cif"}
-        processed_set = query_set - set(failures)
-        records = []
-        for item in processed_set:
-            records.append({
-                "unirefAccession": item[0:4],
-                "unirefAccessionExtended": item,
-                "picklePath": f"{item}.pkl",
-                "cifPath": f"{item}.cif",
-            })
-        bq_df = pd.DataFrame.from_records(records)
-        bq_path = output_dir / "bq.parquet"
-        bq_df.to_parquet(bq_path, index=False)
-        logger.info(f"Saved bigtable to {bq_path} with {len(bq_df)} entries.")
-        
-        
-
-
-
-        
-        
-    
-    
-        
-        
-        
-
-        
-        
-    
-    
-
-
-
-
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-
-
-
-# class DataEngine:
-    
-#     @classmethod
-#     def _seed_everything(cls, seed: int):
-#         random.seed(seed)
-#         np.random.seed(seed)
-#         torch.manual_seed(seed)
-#         if torch.cuda.is_available():
-#             torch.cuda.manual_seed_all(seed)
-    
-#     ### Scanning Functions ###
-#     # scan AFDB / SwissProt / RCSB / CASP / CAMEO dataset and yield path
-#     @classmethod
-#     def _scan_afdb(cls, query: set | None, tmp_dir: Path, shard_id: int) -> Iterator[Path]:
-#         # e.g. for proteome-tax_id-1974607-0_v4.tar, we have
-#         # - AF-A0A2H0UIM4-F1-model_v4.cif.gz
-#         # - AF-A0A2H0UIM4-F1-confidence_v4.json.gz
-#         # - AF-A0A2H0UIM4-F1-predicted_aligned_error_v4.json.gz
-#         # scanning will extract files & return 
-#         # - tmp_dir/AF-A0A2H0UIM4-F1-model_v4.cif.gz
-        
-#         DATASET = [
-#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_00"),
-#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_01"),
-#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_02"),
-#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_03"),
-#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_04"),
-#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_05_dest/part_05"),
-#             Path("/GenSIvePFS/users/lutianyu/data/AFDB/part_06"),
-#         ]
-        
-#         for split_dir in (DATASET if shard_id < 0 else [DATASET[shard_id]]):
-#             # HINT: we should extract .tar here to avoid extracting multiple times
-#             for tar_path in split_dir.glob("proteome-tax_id-*_v4.tar"):
-#                 try:
-#                     with tarfile.open(tar_path, "r") as tf:
-#                         for member in tf:
-#                             # skip uninterested afdb file
-#                             if not member.name.endswith("-F1-model_v4.cif.gz"): continue
-                            
-#                             # skip uninterested protein files
-#                             if query is not None and member.name.removesuffix('.cif.gz') not in query: continue
-                              
-#                             # extract to tmp_dir with the same filename
-#                             tmp_path = tmp_dir / member.name
-#                             if not tmp_path.exists():
-#                                 tf.extract(member, path=tmp_dir)
-                            
-#                             # yield path for further processing
-#                             yield tmp_path
-#                 except Exception as e:
-#                     logger.error(f"Failed to scan {tar_path}: {e}")
-    
-    
-#     ### query functions ###
-#     def query_afdb(
-#         self,
-#         output_dir: Path,
-#         max_concurrent: int,
-#         query_path: Path,           # a .txt file containing list of accession ids
-#         shard_id: int = -1,
-#     ):
-#         if not query_path.name.endswith('.txt'): raise NotImplementedError()    
-#         rawfile_dir = output_dir / "raw"
-#         pickle_dir = output_dir / "pickle"
-#         rawfile_dir.mkdir(parents=True, exist_ok=True)
-#         pickle_dir.mkdir(parents=True, exist_ok=True)
-        
-#         # load query set: AF_AFQ8UGE8F1_1 AF_AFQ8ZB83F1_1 ...
-#         query_set = set()
-#         with open(query_path, 'r') as f:
-#             for line in f:
-#                 for item in line.strip().split():
-#                     if not item.startswith('AF'):
-#                         continue
-#                     else:
-#                         # FIX here: rcsb-style AF_AFA0A075B5T2F1_1 >> uniref-style AF-A0A075B5T2-F1-model_v4
-#                         item_fixed = f"AF-{item.split('_')[1][2:-2]}-F1-model_v4"
-#                         query_set.add(item_fixed)
-        
-#         # submit cif2pickle tasks iteratively
-#         hit_count, futures, failures = 0, [], []
-#         for i, it in enumerate(self._scan_afdb(query_set, rawfile_dir, shard_id)):
-#             logger.info(f"Submitting task [{i+1}/{len(query_set)}]: {it.name} ...")
-#             uniref_accession_extended = it.name.removesuffix('.gz').removesuffix('.cif')
-#             futures.append(task_cif2pickle.remote(it, pickle_dir / f"{uniref_accession_extended}.pkl"))
-            
-#             # reduce memory pressure
-#             if len(futures) >= max_concurrent:
-#                 done, futures = ray.wait(futures, num_returns=max_concurrent // 10)
-#                 done_results = ray.get(done)
-#                 for res in done_results:
-#                     status = res[0]
-#                     if status == "success":
-#                         hit_count = hit_count + 1
-#                         logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
-#                     elif status == "skipped":
-#                         hit_count = hit_count + 1
-#                         logger.warning(f"[{hit_count}/{len(query_set)}] Skipped: {res[1]}")
-#                     elif status == "failed":
-#                         failures.append(res[1])
-#                         logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
-                          
-#         # collecting remaining futures
-#         logger.info("Collecting remaining tasks ...")
-#         while futures:
-#             done, futures = ray.wait(futures)
-#             done_results = ray.get(done)
-#             for res in done_results:
-#                 status = res[0]
-#                 if status == "success":
-#                     hit_count = hit_count + 1
-#                     logger.info(f"[{hit_count}/{len(query_set)}] Processed: {res[1]}")
-#                 elif status == "skipped":
-#                     hit_count = hit_count + 1
-#                     logger.warning(f"[{hit_count}/{len(query_set)}] Skipped (exists): {res[1]}")
-#                 elif status == "failed":
-#                     failures.append(res[1])
-#                     logger.error(f"[{hit_count}/{len(query_set)}] Failed: {res[1]} reason: {res[2]}")
-                    
-#         # HINT: in current design, we can only ensure that all [existed/queried] items are processed
-#         failures_file = output_dir / f"failures_{shard_id}.txt"
-#         if failures_file.exists(): failures_file.unlink()
-#         if failures:
-#             with open(failures_file, "w") as f:
-#                 for item in failures:
-#                     f.write(f"{item}\n")
-#             logger.info(f"Total failed items: {len(failures)}. Saved to {failures_file}")
-#         logger.info(f"All tasks completed. Total queried: {hit_count}/{len(query_set)}")
-        
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+        time_start = time.time()  
