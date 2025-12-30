@@ -1,6 +1,7 @@
 from ast import arg
 from calendar import c
 import random
+from sys import prefix
 import time
 from typing import Any, Dict, Optional, List, Text, Tuple, Union, cast
 import os
@@ -211,11 +212,12 @@ class PackingFoldingTrainer(SFTTrainer):
                     self._dataset_sanity_checked = True
             # keep any other columns besides signature columns +++
             outputs['labels'] = outputs["input_ids"]
+            extra_keys = ['split', 'pdb_name', 'seq_length', 'struct_length']
             return {
                 "input_ids":        outputs["input_ids"],
                 "attention_mask":   outputs["attention_mask"],
                 "labels":           outputs["labels"],
-                **{k: element[k] for k in element.keys() if k not in outputs.keys()}
+                **{k: v for k, v in element.items() if k in extra_keys}
             }
         # end tokenize fn
 
@@ -612,26 +614,27 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
         elif split in ['p2s/unicluster40']:
             return self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
         else:
+            return self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
             # benchmarking, combine p2s + folding evaluation
-            loss1, metrics1, inputs1 = self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
-            torch.cuda.empty_cache()
-            loss2, metrics2, inputs2 = self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
-            # merge metrics
-            metrics1_keys = [
-                'structure_loss', 'structure_acc', 'structure_bleu',
-                'folding_loss', 'folding_acc', 'folding_bleu',
-                'cfolding_loss', 'cfolding_acc', 'cfolding_bleu'
-            ]
-            metrics2_keys = [
-                'tid', 'benchmark',
-                'ar_loss', 'ar_acc', 'ar_bleu',
-                'tm_ar', 'tm_vq',
-                'rmsd_ar', 'rmsd_vq'
-            ]
-            # ! WARN ! should ensure key ordering
-            merged_metrics = {k:torch.tensor(v, device=model.device) for k, v in self.dummy_metrics.items()}
-            merged_metrics = merged_metrics | {k: metrics1[k] for k in metrics1_keys} | {k: metrics2[k] for k in metrics2_keys}
-            return (loss1, merged_metrics, inputs1)
+            # loss1, metrics1, inputs1 = self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
+            # torch.cuda.empty_cache()
+            # loss2, metrics2, inputs2 = self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
+            # # merge metrics
+            # metrics1_keys = [
+            #     'structure_loss', 'structure_acc', 'structure_bleu',
+            #     'folding_loss', 'folding_acc', 'folding_bleu',
+            #     'cfolding_loss', 'cfolding_acc', 'cfolding_bleu'
+            # ]
+            # metrics2_keys = [
+            #     'tid', 'benchmark',
+            #     'ar_loss', 'ar_acc', 'ar_bleu',
+            #     'tm_ar', 'tm_vq',
+            #     'rmsd_ar', 'rmsd_vq'
+            # ]
+            # # ! WARN ! should ensure key ordering
+            # merged_metrics = {k:torch.tensor(v, device=model.device) for k, v in self.dummy_metrics.items()}
+            # merged_metrics = merged_metrics | {k: metrics1[k] for k in metrics1_keys} | {k: metrics2[k] for k in metrics2_keys}
+            # return (loss1, merged_metrics, inputs1)
     
 
     @classmethod
@@ -666,8 +669,7 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
             elif tid == 3:
                 # another group by `split` field
                 for split, split_group in group.groupby('benchmark'):
-                    split_name = GlobalConstants.auto_string(int(split)) # type: ignore
-                    prefix = f"folding/{split_name}/"
+                    prefix = GlobalConstants.auto_string(int(split)) # type: ignore
                     # from ar setting
                     metrics[prefix + 'tm_ar']     = split_group['tm_ar'].mean()
                     metrics[prefix + 'tm_vq']     = split_group['tm_vq'].mean()
@@ -676,30 +678,28 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
                     metrics[prefix + 'ar_loss']   = split_group['ar_loss'].mean()
                     metrics[prefix + 'ar_acc']    = split_group['ar_acc'].mean()
                     metrics[prefix + 'ar_bleu']   = split_group['ar_bleu'].mean()
-                    # from exposure setting
-                    metrics[prefix + 'structure_loss']  = split_group['structure_loss'].mean()
-                    metrics[prefix + 'structure_acc']   = split_group['structure_acc'].mean()
-                    metrics[prefix + 'structure_bleu']  = split_group['structure_bleu'].mean()
-                    metrics[prefix + 'folding_loss']    = split_group['folding_loss'].mean()
-                    metrics[prefix + 'folding_acc']     = split_group['folding_acc'].mean()
-                    metrics[prefix + 'folding_bleu']    = split_group['folding_bleu'].mean()
-                    metrics[prefix + 'cfolding_loss']   = split_group['cfolding_loss'].mean()
-                    metrics[prefix + 'cfolding_acc']    = split_group['cfolding_acc'].mean()
-                    metrics[prefix + 'cfolding_bleu']   = split_group['cfolding_bleu'].mean()
             else:
                 raise NotImplementedError(f"Unknown task id {type(tid)} {tid} found during metrics computation.")
         return metrics
 
     @classmethod
-    def formatting_func_by_templates(cls, example: Any):
-        templates: list = example['templates']  # List[str]
-        if len(templates) > 0:
-            # random choose 1 template string, preappend to text string
-            print(templates)
-            template_str = random.choice(templates)
-            logger.info(f"Using template: {template_str}")
-            return template_str + example['text']
+    def formatting_func_concatenate_templates(cls, example: Dict[str, List[Any]]) -> List[str] | str:
+        if isinstance(example['text'], str):
+            # single example mode
+            text = example['text']
+            templates = example['templates']
+            if len(templates) > 0:
+                template_str = random.choice(templates)
+                return template_str + text
+            else:
+                return text
         else:
-            logger.info("No template found, using raw text.")
-            return example['text']
-           
+            # batch example mode
+            formatted_text = []
+            for text, templates in zip(example['text'], example['templates']):
+                if len(templates) > 0:
+                    template_str = random.choice(templates)
+                    formatted_text.append(template_str + text)
+                else:
+                    formatted_text.append(text)
+            return formatted_text

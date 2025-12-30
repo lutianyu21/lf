@@ -1,0 +1,13 @@
+defaults:
+  - dataset: dist3-1_folding_sft
+  - lm: qwen3
+  - trainer: sft
+  - _self_
+
+# overwrite experiment config
+name: dist3-1@folding_sft
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

@@ -7,6 +7,9 @@ defaults:
 # overwrite experiment config
 name: dist3-1@dfolding_sft
 
+lm:
+  model_dir: /GenSIvePFS/users/lutianyu/lf/utils/qwen_utils/checkpoints/qwen3/Qwen3-0.6B
+
 hydra:
   output_subdir: null
   run:

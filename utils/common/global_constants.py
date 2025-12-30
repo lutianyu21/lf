@@ -28,11 +28,15 @@ class GlobalConstants:
     @classmethod
     def auto_string(cls, split_id: int) -> str:
         return {
-            0:  'dev',
-            1:  'cameo2022',
-            2:  'asp15',
-            3:  'casp16',
-        }[split_id % 10]
+            0:  'folding/dev',
+            1:  'folding/cameo2022',
+            2:  'folding/casp15',
+            3:  'folding/casp16',
+            10: 'cfolding/dev',
+            11: 'cfolding/cameo2022',
+            12: 'cfolding/casp15',
+            13: 'cfolding/casp16',
+        }[split_id]
     
     
     @classmethod

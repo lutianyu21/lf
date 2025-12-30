@@ -193,7 +193,7 @@ def sft(config: DictConfig):
         eval_dataset=dataset_eval,   # type: ignore
         eval_packing=False,
         compute_metrics=PackingFoldingTrainer.compute_metrics,
-        formatting_func=PackingFoldingTrainer.formatting_func_by_templates,
+        formatting_func=PackingFoldingTrainer.formatting_func_concatenate_templates,
         # extended kwargs
         cropping=config_dataset.processing.cropping,
         masking=config_dataset.processing.masking,
