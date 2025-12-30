@@ -15,20 +15,22 @@ LF_TOKENIZER_CKPT_ROOT = Path(os.environ.get("LF_TOKENIZER_CKPT_ROOT", "/SPXvePF
 
 
 DATASET_SPLIT = {
-    'dev':              0,
-    'cameo2022':        1,
-    'casp15':           2,
-    'casp16':           3,
-    'rcsb':             4,
-    'afdb_swissprot':   5,
+    'p2s/dev':              0,
+    'p2s/cameo2022':        1,
+    'p2s/casp15':           2,
+    'p2s/casp16':           3,
+    'p2s/rcsb':             4,
+    'p2s/afdb_swissprot':   5,
+    'p2s/unicluster40':     6,
 }
 
 
 DATASET_RAW_ROOT = {
-    'dev':              (str(LF_DATA_ROOT / 'rcsb/raw'),                 '.cif'),
-    'cameo2022':        (str(LF_DATA_ROOT / 'rcsb/raw'),                 '.cif'),
-    'casp15':           (str(LF_DATA_ROOT / 'casp15/raw'),               '.pdb'),
-    'casp16':           (str(LF_DATA_ROOT / 'casp16/raw'),               '.pdb'),
-    'rcsb':             (str(LF_DATA_ROOT / 'rcsb/raw'),                 '.cif'),
-    'afdb_swissprot':   (str(LF_DATA_ROOT / 'swissprot_v4/raw'),         '.cif.gz'),
+    'p2s/dev':              (str(LF_DATA_ROOT / 'rcsb/raw'),                 '.cif'),
+    'p2s/cameo2022':        (str(LF_DATA_ROOT / 'rcsb/raw'),                 '.cif'),
+    'p2s/casp15':           (str(LF_DATA_ROOT / 'casp15/raw'),               '.pdb'),
+    'p2s/casp16':           (str(LF_DATA_ROOT / 'casp16/raw'),               '.pdb'),
+    'p2s/rcsb':             (str(LF_DATA_ROOT / 'rcsb/raw'),                 '.cif'),
+    'p2s/afdb_swissprot':   (str(LF_DATA_ROOT / 'swissprot_v4/raw'),         '.cif.gz'),
+    'p2s/unicluster40':     (str(LF_DATA_ROOT / 'unicluster40/raw'),         '.cif.gz'),
 }

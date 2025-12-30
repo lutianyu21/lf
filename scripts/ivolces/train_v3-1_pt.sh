@@ -12,12 +12,18 @@ CONFIG_NAME="pretrain"                # Self-contained config template
 # CONFIG_NAME="debug"                 # Use this for quick testing
 
 # Run name (used for checkpoint dir, wandb name, and config name)
-RUN_NAME="debug-qwen3-0.6B-dist3-1@pt"
+RUN_NAME="debug"
 
 # Data paths (input)
 DATA_ROOT="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1"
 TRAIN_DATA="${DATA_ROOT}/folding/unicluster40/train.parquet"
-EVAL_DATA="${DATA_ROOT}/folding/unicluster40/eval.parquet"
+
+# Evaluation datasets
+EVAL_UNICLUSTER="${DATA_ROOT}/folding/unicluster40/eval.parquet"
+EVAL_CAMEO="${DATA_ROOT}/folding/benchmark/cameo2022.parquet"
+EVAL_CASP15="${DATA_ROOT}/folding/benchmark/casp15.parquet"
+# Hydra list format: [path1,path2,path3]
+EVAL_DATA="${EVAL_UNICLUSTER},${EVAL_CAMEO},${EVAL_CASP15}"
 
 # Output directory
 OUTPUT_ROOT="/SPXvePFS/share/jiangtao/checkpoints/LLMFolding"
@@ -40,7 +46,7 @@ export LF_ROOT=/SPXvePFS/users/jtfeng/lf
 cd ${LF_ROOT}
 
 # Data paths
-export LF_DATA_ROOT=/SPXvePFS/share/jiangtao/data/LLMFolding
+export LF_DATA_ROOT=/SPXvePFS/share/llmfolding/lf/data
 export LF_MODEL_ROOT=/SPXvePFS/model
 export LF_TOKENIZER_CKPT_ROOT=/SPXvePFS/share/zzhang/LLMFolding_tokenizer/ckpt
 

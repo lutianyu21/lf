@@ -23,6 +23,8 @@ dataset:
 
   eval:
     - /SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/unicluster40/eval.parquet
+    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/cameo2022.parquet
+    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/casp15.parquet
 
   # Data processing
   processing:
