@@ -30,11 +30,12 @@
 **/cameo2022
 **/pickle
 **/parquet
-/data
 
 /cache
 /pytest
 /dataset
+/data
+**/checkpoints
 
 # still developing
 /infra
