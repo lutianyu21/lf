@@ -8,7 +8,7 @@ defaults:
 name: dist3-1@dfolding_sft
 
 lm:
-  model_dir: /GenSIvePFS/users/lutianyu/lf/utils/qwen_utils/checkpoints/qwen3/Qwen3-0.6B
+  model_dir: /GenSIvePFS/users/lutianyu/lf/output/checkpoints/qwen3-0.6B-dist3@pt/checkpoint-30000
 
 hydra:
   output_subdir: null
