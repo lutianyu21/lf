@@ -1,7 +1,7 @@
 import ray
 ray.init(ignore_reinit_error=True)
 
-from utils.lf_utils.data_engine import DataEngineRCSB, DataEngineBase
+from utils.lf_utils.data_engine import DataEngine
 from pathlib import Path
 
 
@@ -20,47 +20,29 @@ from pathlib import Path
 #     shard_id=0,
 # )
 
-DataEngineBase().parquet(
-    bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022/bq.parquet"),
-    pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022/pickle"),
-    parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/v3-0"),
-    bsz=100,
-    num_consumers=1,
-    num_producers=10,
-    tokenizer_name="dist3",
-    dataset_name="cameo2022",
-    merge_shards=False
-)
-
-
 # DataEngineBase().parquet(
-#     bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster40/bq.parquet"),
-#     pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/unicluster40/pickle"),
+#     bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022/bq.parquet"),
+#     pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022/pickle"),
 #     parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/v3-0"),
 #     bsz=100,
-#     num_consumers=8,
+#     num_consumers=1,
 #     num_producers=10,
 #     tokenizer_name="dist3",
-#     dataset_name="p2s/unicluster40",
+#     dataset_name="cameo2022",
 #     merge_shards=False
 # )
 
 
+DataEngine.pipe(
+    dataset_dir=Path("/GenSIvePFS/users/lutianyu/lf/dataset/v3-2"),
+    bq_path=Path("/GenSIvePFS/users/lutianyu/lf/bq_casp16.parquet"),
+    bsz=32,
+    num_consumers=1,
+    num_producers=10,
+    tokenizer_name="dist3",
+    dataset_name="p2s/casp16",
+    ops=['merge'],
+)
 
 
-# DataEngineRCSB.query(
-#     output_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022"),
-#     query_path=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022/raw/uniref_accession_extended.txt"),
-#     max_concurrent=5000,
-# )
 
-# DataEngineRCSB.parquet(
-#     bq_path=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022/bq.parquet"),
-#     pickle_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022/pickle"),
-#     parquet_dir=Path("/GenSIvePFS/users/lutianyu/lf/data/cameo2022"),
-#     bsz=100,
-#     num_consumers=2,
-#     num_producers=10,
-#     tokenizer_name="dplm",
-#     dataset_name="p2s/cameo2022",
-# )

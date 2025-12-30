@@ -21,6 +21,8 @@
 *.json
 *.tar
 *.cif.gz
+*.txt
+*.parquet
 
 # slink
 **/rcsb

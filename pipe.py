@@ -21,6 +21,7 @@ import datasets
 from datasets import (
     Features,
     Value,
+    List,
     Dataset,
     IterableDataset,
     load_dataset,
@@ -49,7 +50,6 @@ from utils.lf_utils import (
     ProteinProcessor,
     ExtraColumnCollator,
     UnbatchedModalityLogitsProcessorBase,
-    DATASET_SPLIT, DATASET_RAW_ROOT,
     PackingFoldingTrainer,
 )
 
@@ -88,12 +88,13 @@ def sft(config: DictConfig):
     # prepare dataset
     start_time = time.time()
     features = Features({
-        "split":            Value("string"),
-        "pdb_name":         Value("string"),
-        "plddt":            Value("float32"),
-        "text":             Value("string"),
-        "seq_length":       Value("int64"),
-        "struct_length":    Value("int64"),
+        "split":                Value("string"),
+        "pdb_name":             Value("string"),
+        "plddt":                Value("float32"),
+        "text":                 Value("string"),
+        "seq_length":           Value("int64"),
+        "struct_length":        Value("int64"),
+        "templates":            List(Value("string")),
     })
     
     def make_perpetual(ds, base_seed: int = 2025, buffer_size: int = 10000):
@@ -192,6 +193,7 @@ def sft(config: DictConfig):
         eval_dataset=dataset_eval,   # type: ignore
         eval_packing=False,
         compute_metrics=PackingFoldingTrainer.compute_metrics,
+        formatting_func=PackingFoldingTrainer.formatting_func_by_templates,
         # extended kwargs
         cropping=config_dataset.processing.cropping,
         masking=config_dataset.processing.masking,
@@ -199,7 +201,6 @@ def sft(config: DictConfig):
         concatenation_ratio=config_dataset.processing.concatenation_ratio,
     )
     sft_trainer.train() # type: ignore
-    
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Finished SFT training ...')
 

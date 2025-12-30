@@ -1,5 +1,6 @@
 from ast import arg
 from calendar import c
+import random
 import time
 from typing import Any, Dict, Optional, List, Text, Tuple, Union, cast
 import os
@@ -26,14 +27,15 @@ import sacrebleu
 from transformers.generation.configuration_utils import GenerationConfig
 from trl import SFTTrainer, SFTConfig
 from trl.trainer.utils import ConstantLengthDataset
-from utils.openfold_utils import OpenfoldProtein
-from utils.lf_utils import (
-    ProteinProcessor, 
-    ItemwiseConstantLengthDataset,
-    ExtraColumnCollator,
-    UnbatchedModalityLogitsProcessorBase,
-    DATASET_SPLIT, DATASET_RAW_ROOT,
-)
+
+from ..common import GlobalConstants
+from ..openfold_utils import OpenfoldProtein
+
+from .protein_processor import ProteinProcessor
+from .logits import UnbatchedModalityLogitsProcessorBase
+from .data import ItemwiseConstantLengthDataset, ExtraColumnCollator
+
+
 
 
 
@@ -191,7 +193,6 @@ class PackingFoldingTrainer(SFTTrainer):
 
         # Inspired from: https://huggingface.co/learn/nlp-course/chapter7/6?fw=pt
         def tokenize(element):
-            
             outputs = tokenizer(
                 element["text"] if not use_formatting_func else formatting_func(element),
                 add_special_tokens=add_special_tokens,
@@ -240,15 +241,7 @@ class PackingFoldingTrainer(SFTTrainer):
         inputs: dict[str, Union[torch.Tensor, Any]],
         return_outputs: bool = False,
         num_items_in_batch: Optional[torch.Tensor] = None,
-    ):
-        
-        # decode inputs['input_ids'] for debugging
-        logger.info(self.processor.tokenizer.decode(inputs['input_ids'][0].cpu().tolist()))
-        logger.info(self.processor.tokenizer.decode(inputs['input_ids'][1].cpu().tolist()))
-        logger.info(self.processor.tokenizer.decode(inputs['input_ids'][2].cpu().tolist()))
-        
-        
-        
+    ):    
         # logger.warning(self.processor.tokenizer.decode(inputs['labels'][0].cpu().tolist()))
         
         # if self.use_bitwise_cross_entropy:
@@ -566,8 +559,7 @@ CFolding  Loss/Acc/Bleu:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}/{cfold
         ).score
         
         split, pdb_name, device = inputs['split'][0], inputs['pdb_name'][0], inputs['input_ids'].device
-        root, format = DATASET_RAW_ROOT[split][0], DATASET_RAW_ROOT[split][1]
-        p_nature = OpenfoldProtein.from_file(Path(root)/f"{pdb_name}{format}").to(device)
+        p_nature = OpenfoldProtein.from_file(GlobalConstants.auto_pathing(pdb_name)).to(device)
         
         # WARN processor's priority: move protein to processor's device
         # so we should either move processor to cuda here, or
@@ -581,7 +573,7 @@ CFolding  Loss/Acc/Bleu:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}/{cfold
         
         metrics = dict(
             tid=3.0,
-            benchmark=DATASET_SPLIT[split],
+            benchmark=GlobalConstants.auto_numeric(split),
             ar_loss=ar_loss.item(),
             ar_acc=ar_acc,
             ar_bleu=ar_bleu,
@@ -674,7 +666,7 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
             elif tid == 3:
                 # another group by `split` field
                 for split, split_group in group.groupby('benchmark'):
-                    split_name = list(DATASET_SPLIT.keys())[int(split)] # type: ignore
+                    split_name = GlobalConstants.auto_string(int(split)) # type: ignore
                     prefix = f"folding/{split_name}/"
                     # from ar setting
                     metrics[prefix + 'tm_ar']     = split_group['tm_ar'].mean()
@@ -697,4 +689,17 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
             else:
                 raise NotImplementedError(f"Unknown task id {type(tid)} {tid} found during metrics computation.")
         return metrics
-    
+
+    @classmethod
+    def formatting_func_by_templates(cls, example: Any):
+        templates: list = example['templates']  # List[str]
+        if len(templates) > 0:
+            # random choose 1 template string, preappend to text string
+            print(templates)
+            template_str = random.choice(templates)
+            logger.info(f"Using template: {template_str}")
+            return template_str + example['text']
+        else:
+            logger.info("No template found, using raw text.")
+            return example['text']
+           

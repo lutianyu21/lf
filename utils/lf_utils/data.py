@@ -14,8 +14,6 @@ import torch.utils.data
 import torch.distributed as dist
 from transformers import Qwen2TokenizerFast
 from trl.trainer.utils import ConstantLengthDataset
-
-from .constant import DATASET_SPLIT
 from .protein_processor import ProteinProcessor
 
 __all__ = [
@@ -74,7 +72,7 @@ class ExtraColumnCollator:
         ## masking fn ## (not required for evaluation, only for training)
         
         ## concatenation fn ##
-        if organized_batch['split'][0] in ['p2s/unicluster40', 'p2s/afdb_swissprot', 'p2s/rcsb'] and self._concatenation:
+        if organized_batch['split'][0] in ['psps/unicluster40'] and self._concatenation:
             # before: <seq>....</seq><struct>....</struct>
             # after:  <seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
             M, ratio, tmp = self._concatenation_size, self._concatenation_ratio, []
