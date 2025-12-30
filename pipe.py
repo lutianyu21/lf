@@ -21,6 +21,7 @@ import datasets
 from datasets import (
     Features,
     Value,
+    Sequence,
     Dataset,
     IterableDataset,
     load_dataset,
@@ -91,15 +92,7 @@ def sft(config: DictConfig):
     
     # prepare dataset
     start_time = time.time()
-    features = Features({
-        "split":            Value("string"),
-        "pdb_name":         Value("string"),
-        "plddt":            Value("float32"),
-        "text":             Value("string"),
-        "seq_length":       Value("int64"),
-        "struct_length":    Value("int64"),
-    })
-    
+
     def make_perpetual(ds, base_seed: int = 2025, buffer_size: int = 10000):
         def gen():
             epoch = 0
@@ -111,23 +104,28 @@ def sft(config: DictConfig):
                     yield ex
                 epoch += 1
         return IterableDataset.from_generator(gen, features=ds.features)
-    
+
     # dataset_eval = load_dataset('parquet', streaming=False, split='train', data_files=config_dataset.eval)
     # for quick evaluation, resitrict to 1000 samples of each eval dataset
     dataset_eval_small = []
     for eval_ds in config_dataset.eval:
-        ds = load_dataset('parquet', streaming=False, split='train', data_files=eval_ds, features=features)
+        ds = load_dataset('parquet', streaming=False, split='train', data_files=eval_ds)
         ds = ds.select(range(min(1000, len(ds)))) # type: ignore
         dataset_eval_small.append(ds)
     dataset_eval = datasets.concatenate_datasets(dataset_eval_small)
+    # Normalize weights to probabilities (must sum to 1)
+    weights = config_dataset.weight
+    weight_sum = sum(weights)
+    probabilities = [w / weight_sum for w in weights]
+
     dataset_train = interleave_datasets(
         datasets=[
             make_perpetual(
-                load_dataset('parquet', streaming=True, split='train', data_files=fpath, features=features)
+                load_dataset('parquet', streaming=True, split='train', data_files=fpath)
             )
             for i, fpath in enumerate(config_dataset.train)
-        ],    
-        probabilities=config_dataset.weight,
+        ],
+        probabilities=probabilities,
         seed=2025,
     )
     elapsed = time.time() - start_time

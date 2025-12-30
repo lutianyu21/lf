@@ -2,6 +2,10 @@
 #===============================================================================
 # LLMFolding Training Script for Volces Cluster
 #===============================================================================
+HYDRA_FULL_ERROR=1
+# Project root
+export LF_ROOT=/SPXvePFS/users/jtfeng/lf
+cd ${LF_ROOT}
 
 #-------------------------------------------------------------------------------
 # 1. TRAINING PARAMETERS (modify these for different experiments)
@@ -12,15 +16,19 @@ CONFIG_NAME="pretrain"                # Self-contained config template
 # CONFIG_NAME="debug"                 # Use this for quick testing
 
 # Run name (used for checkpoint dir, wandb name, and config name)
-RUN_NAME="debug"
+RUN_NAME="pt@tok4"
 
-# Data paths (input)
-TRAIN_DATA="/SPXvePFS/share/jiangtao/data/LLMFolding/v4-rmsd=2.3/parquet/train.parquet"
+# Training datasets (Hydra list format: path1,path2,...)
+TRAIN_FOLDING="/SPXvePFS/share/jiangtao/data/LLMFolding/v4-rmsd2.3/folding/parquet/train.parquet"
+TRAIN_STRUCTURE="/SPXvePFS/share/jiangtao/data/LLMFolding/v4-rmsd2.3/structure/parquet/train.parquet"
+TRAIN_SEQUENCE="/SPXvePFS/share/llmfolding/lf/dataset/dataset_distv4-rmsd2.3/sequence/uniref50/train.parquet"
+TRAIN_DATA="${TRAIN_FOLDING},${TRAIN_STRUCTURE},${TRAIN_SEQUENCE}"
+TRAIN_WEIGHT="0.5,0.3,0.2"
+
 # Evaluation datasets
-EVAL_CAMEO="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/cameo2022.parquet"
-EVAL_CASP15="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/casp15.parquet"
-EVAL_CASP16="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/casp16.parquet"
-# Hydra list format: [path1,path2,path3]
+EVAL_CAMEO="/SPXvePFS/share/llmfolding/lf/dataset/dataset_distv4-rmsd2.3/folding/benchmark/cameo22.parquet"
+EVAL_CASP15="/SPXvePFS/share/llmfolding/lf/dataset/dataset_distv4-rmsd2.3/folding/benchmark/casp15.parquet"
+EVAL_CASP16="/SPXvePFS/share/llmfolding/lf/dataset/dataset_distv4-rmsd2.3/folding/benchmark/casp16.parquet"
 EVAL_DATA="${EVAL_CAMEO},${EVAL_CASP15},${EVAL_CASP16}"
 
 # Output directory
@@ -39,10 +47,6 @@ PER_DEVICE_BATCH_SIZE=8               # Batch size per GPU
 #-------------------------------------------------------------------------------
 # 2. GLOBAL PATH CONFIGURATION (Volces cluster paths)
 #-------------------------------------------------------------------------------
-# Project root
-export LF_ROOT=/SPXvePFS/users/jtfeng/lf
-cd ${LF_ROOT}
-
 # Data paths
 export LF_DATA_ROOT=/SPXvePFS/share/llmfolding/lf/data
 export LF_MODEL_ROOT=/SPXvePFS/model
@@ -165,6 +169,7 @@ $TORCHRUN \
     pipe.py --config-name="$CONFIG_NAME" \
     "name=${RUN_NAME}" \
     "dataset.train=[${TRAIN_DATA}]" \
+    "dataset.weight=[${TRAIN_WEIGHT}]" \
     "dataset.eval=[${EVAL_DATA}]" \
     "trainer.output_dir=${CHECKPOINT_DIR}" \
     "trainer.gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS}" \
