@@ -210,11 +210,12 @@ class PackingFoldingTrainer(SFTTrainer):
                     self._dataset_sanity_checked = True
             # keep any other columns besides signature columns +++
             outputs['labels'] = outputs["input_ids"]
+            extra_keys = ['split', 'pdb_name', 'seq_Length', 'struct_length']
             return {
                 "input_ids":        outputs["input_ids"],
                 "attention_mask":   outputs["attention_mask"],
                 "labels":           outputs["labels"],
-                **{k: element[k] for k in element.keys() if k not in outputs.keys()}
+                **{k: element[k] for k in element.keys() if k in extra_keys}
             }
         # end tokenize fn
 
