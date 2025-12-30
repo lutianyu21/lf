@@ -79,9 +79,13 @@ def sft(config: DictConfig):
     
     start_time = time.time()
     config_dataset, config_lm, config_trainer = config.dataset, config.lm, config.trainer
-    config_trainer.output_dir = str(Path(__file__).parent/f'output/checkpoints/{config.name}')
+    # Support custom checkpoint root via environment variable
+    checkpoint_root = os.environ.get("LF_CHECKPOINT_ROOT", str(Path(__file__).parent / "output/checkpoints"))
+    config_trainer.output_dir = f"{checkpoint_root}/{config.name}"
     if (rank := int(os.environ.get("RANK", 0))) == 0:
-        wandb.init(project="LLMFolding", name=config.name, config=OmegaConf.to_container(config, resolve=True)) # type: ignore
+        wandb_project = os.environ.get("WANDB_PROJECT", "LLMFolding")
+        wandb_name = os.environ.get("WANDB_NAME", config.name)
+        wandb.init(project=wandb_project, name=wandb_name, config=OmegaConf.to_container(config, resolve=True)) # type: ignore
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Loaded config ...')
     
