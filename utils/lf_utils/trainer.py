@@ -669,7 +669,7 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
             elif tid == 3:
                 # another group by `split` field
                 for split, split_group in group.groupby('benchmark'):
-                    prefix = GlobalConstants.auto_string(int(split)) # type: ignore
+                    prefix = GlobalConstants.auto_string(int(split)) + '/' # type: ignore
                     # from ar setting
                     metrics[prefix + 'tm_ar']     = split_group['tm_ar'].mean()
                     metrics[prefix + 'tm_vq']     = split_group['tm_vq'].mean()
