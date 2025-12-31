@@ -129,8 +129,11 @@ class RawFileWorker:
     def fn(self, queue: Queue):
         batch = []
         for _, row in self.bq.iterrows():
-            path = self._find_structure_file(row['unirefAccession'])
+            accession = row['unirefAccession']
+            path = self._find_structure_file(accession)
             protein = OpenfoldProtein.from_file(path)
+            # 使用原始 accession 作为 entry，保持 @ 格式一致性（如 7v8t@A）
+            protein.entry = accession
             batch.append(protein)
             if len(batch) >= self.bsz:
                 queue.put(batch)
@@ -192,7 +195,7 @@ class DataEngine:
             'psps':         'cfolding',
         }[category] / {
             'unicluster40': 'unicluster40',
-            'cameo22':    'benchmark',
+            'cameo2022':    'benchmark',
             'casp15':       'benchmark',
             'casp16':       'benchmark',
         }[name]
