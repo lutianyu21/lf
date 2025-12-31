@@ -645,6 +645,7 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
         metrics = {}
         # group dataframe by tid
         for tid, group in df.groupby('tid'):
+            logger.warning(f"Computing metrics for task id {tid} with {len(group)} samples.")
             if tid == 0:
                 # pLM metrics
                 metrics['plm/sequence_loss']  = group['sequence_loss'].mean()

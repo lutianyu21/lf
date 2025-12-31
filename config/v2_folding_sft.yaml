@@ -1,0 +1,16 @@
+defaults:
+  - dataset: dist2_folding_sft
+  - lm: qwen3
+  - trainer: sft
+  - _self_
+
+# overwrite experiment config
+name: dist2@folding_sft
+
+lm:
+  model_dir: /GenSIvePFS/users/lutianyu/lf/output/checkpoints/qwen3-0.6B@40/1.5/1.5(2/3/5)@pt/checkpoint-70000
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

@@ -30,6 +30,7 @@
 **/cameo2022
 **/pickle
 **/parquet
+**/tmp
 
 /cache
 /pytest
