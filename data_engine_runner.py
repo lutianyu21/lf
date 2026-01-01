@@ -99,11 +99,21 @@ def main():
         default=["merge", "shuffle", "split"],
         help="操作列表 (default: merge shuffle split)"
     )
+    parser.add_argument(
+        "--max_seq_length",
+        type=int,
+        default=4096,
+        help="最大序列长度，超过的蛋白将被跳过 (default: 4096)"
+    )
 
     args = parser.parse_args()
 
-    # 初始化 Ray
-    ray.init(ignore_reinit_error=True)
+    # 初始化 Ray (禁用 metrics 避免集群环境下的连接问题)
+    ray.init(
+        ignore_reinit_error=True,
+        include_dashboard=False,
+        _metrics_export_port=None,
+    )
 
     # 导入 DataEngine（在 ray.init 之后）
     from utils.lf_utils.data_engine import DataEngine
@@ -122,6 +132,7 @@ def main():
         qwen_tokenizer_path=args.qwen_tokenizer_path,
         dataset_name=args.dataset_name,
         ops=args.ops,
+        max_seq_length=args.max_seq_length,
     )
 
 

@@ -19,7 +19,7 @@ dataset:
   # NOTE: Update paths when unicluster40 data is generated
   train:
     - /SPXvePFS/share/jiangtao/data/LLMFolding/v4-rmsd=2.3/parquet/train.parquet  # folding
-    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_distv4-rmsd2.3/sequence/uniref50/train.parquet  # sequence
+    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/sequence/uniref50/train.parquet  # sequence
 
   # Sampling weights for each dataset (should match train list order)
   weight:
@@ -29,9 +29,9 @@ dataset:
   # Evaluation data
   eval:
     - /SPXvePFS/share/jiangtao/data/LLMFolding/v4-rmsd=2.3/parquet/eval.parquet
-    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_distv4-rmsd2.3/folding/benchmark/cameo22.parquet
-    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_distv4-rmsd2.3/folding/benchmark/casp15.parquet
-    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_distv4-rmsd2.3/folding/benchmark/casp16.parquet
+    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/cameo2022.parquet
+    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/casp15.parquet
+    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/casp16.parquet
 
   # Data processing
   processing:
@@ -89,7 +89,7 @@ trainer:
   # - generation_eval (slow, with AR): runs at eval_generation_steps (defaults to save_steps)
   per_device_eval_batch_size: 1
   eval_strategy: steps
-  eval_steps: 1000
+  eval_steps: 200
   # eval_generation_steps: 1000  # Uncomment to override (defaults to save_steps)
 
 #-------------------------------------------------------------------------------

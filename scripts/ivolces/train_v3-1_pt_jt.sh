@@ -16,21 +16,24 @@ CONFIG_NAME="pretrain"                # Self-contained config template
 # CONFIG_NAME="debug"                 # Use this for quick testing
 
 # Run name (used for checkpoint dir, wandb name, and config name)
-RUN_NAME="pt@tok3-1"
+RUN_NAME="pt-jt@tok3-1"
 
 # Training datasets (Hydra list format: path1,path2,...)
-TRAIN_FOLDING="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/unicluster40/train.parquet"
-TRAIN_STRUCTURE="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/structure/unicluster40/train.parquet"
+TRAIN_FOLDING_RCSB="/SPXvePFS/share/llmfolding/lf/dataset/v3.1/folding/rcsb/train.parquet"
+TRAIN_FOLDING_UNICLUSTER40="/SPXvePFS/share/llmfolding/lf/dataset/v3.1/folding/unicluster40/train.parquet"
+TRAIN_STRUCTURE_RCSB="/SPXvePFS/share/llmfolding/lf/dataset/v3.1/structure/rcsb/train.parquet"
+TRAIN_STRUCTURE_UNICLUSTER40="/SPXvePFS/share/llmfolding/lf/dataset/v3.1/structure/unicluster40/train.parquet"
 TRAIN_SEQUENCE="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist2/sequence/uniref50/train.parquet"
-TRAIN_DATA="${TRAIN_FOLDING},${TRAIN_STRUCTURE},${TRAIN_SEQUENCE}"
-TRAIN_WEIGHT="0.5,0.3,0.2"
+TRAIN_DATA="${TRAIN_FOLDING_RCSB},${TRAIN_FOLDING_UNICLUSTER40},${TRAIN_STRUCTURE_RCSB},${TRAIN_STRUCTURE_UNICLUSTER40},${TRAIN_SEQUENCE}"
+TRAIN_WEIGHT="0.2,0.2,0.2,0.2,0.2"
 
 # Evaluation datasets
 EVAL_SEQ="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist2/sequence/uniref50/eval.parquet"
-EVAL_STRUCT="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/structure/unicluster40/eval.parquet"
-EVAL_CAMEO="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/cameo2022.parquet"
-EVAL_CASP15="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/casp15.parquet"
-EVAL_DATA="${EVAL_SEQ},${EVAL_STRUCT},${EVAL_CAMEO},${EVAL_CASP15}"
+EVAL_STRUCT="/SPXvePFS/share/llmfolding/lf/dataset/v3.1/structure/rcsb/eval.parquet"
+EVAL_CAMEO="/SPXvePFS/share/llmfolding/lf/dataset/v3.1/folding/benchmark/cameo2022.parquet"
+EVAL_CASP15="/SPXvePFS/share/llmfolding/lf/dataset/v3.1/folding/benchmark/casp15.parquet"
+EVAL_CASP16="/SPXvePFS/share/llmfolding/lf/dataset/v3.1/folding/benchmark/casp16.parquet"
+EVAL_DATA="${EVAL_SEQ},${EVAL_STRUCT},${EVAL_CAMEO},${EVAL_CASP15},${EVAL_CASP16}"
 
 # Tokenizer/Structure checkpoints (optional, uses defaults if not set)
 # Available tokenizers: v4-epoch=46-val_loss=0.1712.ckpt (default), v4-epoch=00, v4-ar-epoch=00

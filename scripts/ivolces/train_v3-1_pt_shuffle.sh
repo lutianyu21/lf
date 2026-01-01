@@ -16,12 +16,12 @@ CONFIG_NAME="pretrain"                # Self-contained config template
 # CONFIG_NAME="debug"                 # Use this for quick testing
 
 # Run name (used for checkpoint dir, wandb name, and config name)
-RUN_NAME="pt@tok3-1"
+RUN_NAME="pt@tok3-1@shuffle"
 
 # Training datasets (Hydra list format: path1,path2,...)
-TRAIN_FOLDING="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/unicluster40/train.parquet"
-TRAIN_STRUCTURE="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/structure/unicluster40/train.parquet"
-TRAIN_SEQUENCE="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist2/sequence/uniref50/train.parquet"
+TRAIN_FOLDING="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/unicluster40/train_shuffled.parquet"
+TRAIN_STRUCTURE="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/structure/unicluster40/train_shuffled.parquet"
+TRAIN_SEQUENCE="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist2/sequence/uniref50/train_shuffled.parquet"
 TRAIN_DATA="${TRAIN_FOLDING},${TRAIN_STRUCTURE},${TRAIN_SEQUENCE}"
 TRAIN_WEIGHT="0.5,0.3,0.2"
 

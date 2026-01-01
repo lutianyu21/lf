@@ -172,14 +172,31 @@ class ProteinProcessor(ProcessorMixin):
         results = []
         batch_token_ids = out['batch_token_ids']                # [B, L]
         batch_padding_mask = (batch_token_ids == -100).long()   # [B, L]
+
+        # 根据 dataset_name 前缀决定 text 格式
+        # p2s/* (folding): <seq>...<struct>...
+        # s/* (structure): <struct>...
+        # p/* (sequence): <seq>...
+        task_type = dataset_name.split('/')[0]
+
         for protein, token_ids, padding_mask in zip(batch, batch_token_ids, batch_padding_mask):
             seq_text = ' '.join(list(str(protein)))
             seq_length = len(protein)
             token_ids = token_ids[~padding_mask.bool()]
             struct_text = "".join([self.struct_template.format(token_id=i) for i in token_ids])
             struct_length = len(token_ids)
-            text = f"<seq> {seq_text}</seq><struct>{struct_text}</struct>"
-            prompt = f"<seq> {seq_text}</seq><struct>"
+
+            # 根据任务类型生成不同格式的 text
+            if task_type == 's':
+                # structure only
+                text = f"<struct>{struct_text}</struct>"
+            elif task_type == 'p':
+                # sequence only
+                text = f"<seq> {seq_text}</seq>"
+            else:
+                # p2s / psps: folding (seq + struct)
+                text = f"<seq> {seq_text}</seq><struct>{struct_text}</struct>"
+
             results.append({
                 "split":            dataset_name,
                 "pdb_name":         protein.entry,
@@ -187,6 +204,7 @@ class ProteinProcessor(ProcessorMixin):
                 "text":             text,
                 "seq_length":       seq_length,
                 "struct_length":    struct_length,
+                "templates":        [],  # 占位符，与 dist3-1 格式一致
             })
         return results
         

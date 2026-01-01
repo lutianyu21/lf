@@ -1,6 +1,6 @@
 #!/bin/bash
 # 评估数据集处理脚本
-# 用于生成 casp15/casp16/cameo22 的 tokenized parquet 文件
+# 用于生成 casp15/casp16/cameo2022 的 tokenized parquet 文件
 # 支持两种任务类型: p2s (folding) 和 psps (cfolding)
 
 set -e
@@ -12,7 +12,7 @@ cd ${PROJECT_ROOT}
 PYTHON="/SPXvePFS/share/miniconda3/envs/lf/bin/python"
 
 # Checkpoint 路径
-TOKENIZER_CKPT="/SPXvePFS/share/zzhang/ckpt/v4-epoch=46-val_loss=0.1712.ckpt"
+TOKENIZER_CKPT="/SPXvePFS/share/zzhang/ckpt/v4-ar-epoch=00-val_loss=0.1949.ckpt"
 STRUCTURE_CKPT="/SPXvePFS/share/zzhang/ckpt/v3-structure-epoch=04-val_rmsd=0.3359.ckpt"
 
 # 数据路径
@@ -20,7 +20,7 @@ BQ_DIR="/SPXvePFS/share/jiangtao/evaluation/bq"
 STRUCTURE_DIR="/SPXvePFS/share/jiangtao/evaluation/structure"
 
 # 输出目录
-OUTPUT_DIR="/SPXvePFS/share/llmfolding/lf/dataset/dataset_distv4-rmsd2.3"
+OUTPUT_DIR="/SPXvePFS/share/llmfolding/lf/dataset/v3.1"
 
 # 处理参数
 NUM_CONSUMERS=1
@@ -74,7 +74,7 @@ show_usage() {
     echo "                        p2s  = folding (蛋白质结构预测)"
     echo "                        psps = cfolding (条件折叠)"
     echo "                        all  = 同时处理 p2s 和 psps"
-    echo "  --dataset NAME        处理单个数据集 (casp15|casp16|cameo22|all)"
+    echo "  --dataset NAME        处理单个数据集 (casp15|casp16|cameo2022|all)"
     echo "  --output DIR          输出目录 (默认: ${OUTPUT_DIR})"
     echo "  -h, --help            显示帮助"
     echo ""
@@ -140,8 +140,8 @@ run_task() {
         run_benchmark "casp16" "bq_casp16.parquet" "casp16" "$task"
     fi
 
-    if [ "$DATASET" == "all" ] || [ "$DATASET" == "cameo22" ]; then
-        run_benchmark "cameo22" "bq_cameo.parquet" "cameo22" "$task"
+    if [ "$DATASET" == "all" ] || [ "$DATASET" == "cameo2022" ]; then
+        run_benchmark "cameo2022" "bq_cameo.parquet" "cameo2022" "$task"
     fi
 }
 
