@@ -107,18 +107,44 @@ class GPUWorker:
 
 @ray.remote
 class RawFileWorker:
-    def __init__(self, df: pd.DataFrame, structure_dir: Path, bsz: int):
+    def __init__(self, df: pd.DataFrame, structure_dir: Path, bsz: int, max_seq_length: int = 4096):
         self.bq = df
         self.structure_dir = Path(structure_dir)
         self.bsz = bsz
+        self.max_seq_length = max_seq_length
+        self.skipped_count = 0
 
     def _find_structure_file(self, accession: str) -> Path:
-        """查找蛋白质结构文件，支持多种格式和命名规则"""
+        """查找蛋白质结构文件，支持多种格式和命名规则
+
+        支持的格式:
+        - AF-xxx: AlphaFold 预测结构
+        - 1kgf%1: PDB 实验结构 (pdb_id%entity_id)，%后面是 entity_id
+        - 7v8t@A: 按 auth_asym_id 提取链
+
+        注意: io.py 的 _gemmi_parser 会解析文件名中的 % 和 @ 符号来确定如何提取链
+        - % 表示按 entity_id 提取
+        - @ 表示按 auth_asym_id 提取
+        """
+        # 对于 PDB 格式 (1kgf%1)，提取 PDB ID 来查找文件
+        # 但返回的路径需要包含 %entity_id 以便 io.py 正确解析
+        if '%' in accession:
+            pdb_id = accession.split('%')[0]
+            entity_id = accession.split('%')[1]
+            for suffix in ['.cif.gz', '.cif', '.pdb.gz', '.pdb']:
+                path = self.structure_dir / f'{pdb_id}{suffix}'
+                if path.exists():
+                    # 返回带 %entity_id 的虚拟路径，io.py 会解析它
+                    return self.structure_dir / f'{pdb_id}%{entity_id}{suffix}'
+            raise FileNotFoundError(f'Cannot find structure file for: {accession} in {self.structure_dir}')
+
+        # 对于其他格式 (AlphaFold, @auth_asym_id)
         accession_variants = [
             accession,
             accession.replace('@', '-'),
             accession.replace('@', '_'),
         ]
+
         for acc in accession_variants:
             for suffix in ['.cif.gz', '.cif', '.pdb.gz', '.pdb']:
                 path = self.structure_dir / f'{acc}{suffix}'
@@ -130,16 +156,31 @@ class RawFileWorker:
         batch = []
         for _, row in self.bq.iterrows():
             accession = row['unirefAccession']
-            path = self._find_structure_file(accession)
-            protein = OpenfoldProtein.from_file(path)
-            # 使用原始 accession 作为 entry，保持 @ 格式一致性（如 7v8t@A）
-            protein.entry = accession
-            batch.append(protein)
+            try:
+                path = self._find_structure_file(accession)
+                # io.py 的 from_file 会根据路径中的 % 或 @ 自动提取对应的链/entity
+                protein = OpenfoldProtein.from_file(path)
+
+                # 检查序列长度，跳过过大的蛋白
+                seq_len = len(protein.residue_aatype)
+                if seq_len > self.max_seq_length:
+                    self.skipped_count += 1
+                    logger.warning(f"Skipped {accession} (seq_len={seq_len} > max={self.max_seq_length})")
+                    continue
+                # 使用原始 accession 作为 entry，保持格式一致性
+                protein.entry = accession
+                batch.append(protein)
+            except Exception as e:
+                self.skipped_count += 1
+                logger.warning(f"Failed to load {accession}: {e}")
+                continue
             if len(batch) >= self.bsz:
                 queue.put(batch)
                 batch = []
         if batch:
             queue.put(batch)
+        if self.skipped_count > 0:
+            logger.info(f"Total skipped proteins: {self.skipped_count}")
         queue.put(None)  # signal done
 
 
@@ -161,6 +202,7 @@ class DataEngine:
         qwen_tokenizer_path: str = "/SPXvePFS/model/Qwen3-0.6B",  # qwen tokenizer path
         dataset_name:   str = "p2s/unicluster40",       # will be mapped to feature['split']
         ops:            List[str] = ['merge', 'shuffle', 'split'],
+        max_seq_length: int = 4096,                     # 最大序列长度，超过的将被跳过
     ):
         # load bigtable
         time_start = time.time()
@@ -178,7 +220,7 @@ class DataEngine:
         producers = [
             RawFileWorker.remote(bq_df[
                 i * num_items_producer : min((i + 1) * num_items_producer, len(bq_df))
-            ], structure_dir, bsz) for i in range(num_producers)
+            ], structure_dir, bsz, max_seq_length) for i in range(num_producers)
         ]
         num_consumers_max = num_consumers - 1
         num_producers_done = 0
@@ -193,8 +235,12 @@ class DataEngine:
         final_dir = dataset_dir / {
             'p2s':          'folding',
             'psps':         'cfolding',
+            's':            'structure',
+            'p':            'sequence',
         }[category] / {
             'unicluster40': 'unicluster40',
+            'uniref50':     'uniref50',
+            'rcsb':         'rcsb',
             'cameo2022':    'benchmark',
             'casp15':       'benchmark',
             'casp16':       'benchmark',
@@ -211,6 +257,7 @@ class DataEngine:
         writer_checkpoint_frequency = 100000
         writer_checkpoint_buffer = 0
         writer_checkpoint_cnt = 0
+        total_processed = 0  # 已处理总数
         parquet_writer, bid, pending_refs = None, 0, []
         # loop until all producers are done
         while True:
@@ -219,17 +266,19 @@ class DataEngine:
                 num_producers_done += 1
                 if num_producers_done >= num_producers: break
                 continue
-            
+
             # submit to a consumer, round-robin
             current_consumer = consumers[bid % num_consumers]
             ref = current_consumer.fn.remote(batch)  # type: ignore
             pending_refs.append(ref)
             bid += 1
-            
+
             if len(pending_refs) >= num_consumers_max:
                 ready, pending_refs = ray.wait(pending_refs, num_returns=1)
                 result = ray.get(ready[0])
-                logger.info(f"[{int(time.time() - time_start)}s] Processed [{len(result)}] items (pending={len(pending_refs)})")
+                total_processed += len(result)
+                progress_pct = total_processed / num_items_total * 100
+                logger.info(f"[{int(time.time() - time_start)}s] Processed {total_processed}/{num_items_total} ({progress_pct:.1f}%) (pending={len(pending_refs)})")
                 time_start = time.time()
 
                 # write to parquet
@@ -255,7 +304,9 @@ class DataEngine:
         while pending_refs:
             ready, pending_refs = ray.wait(pending_refs, num_returns=1)
             result = ray.get(ready[0])
-            logger.info(f"[{int(time.time() - time_start)}s] Processed [{len(result)}] items (pending={len(pending_refs)})")
+            total_processed += len(result)
+            progress_pct = total_processed / num_items_total * 100
+            logger.info(f"[{int(time.time() - time_start)}s] Processed {total_processed}/{num_items_total} ({progress_pct:.1f}%) (pending={len(pending_refs)})")
             time_start = time.time()
             
             # write to parquet
