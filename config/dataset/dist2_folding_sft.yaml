@@ -1,20 +1,38 @@
-type: dist3
+type: dist2
 
 train:
-  - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist3-1/folding/unicluster40/train.parquet
+  - weight: 1.0
+    name: psps
+    path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/folding/unicluster40/train.parquet
 
 weight:
   - 1.0
 
 eval:
-  - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/sequence/uniref50/eval.parquet
-  - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist3-1/structure/unicluster40/eval.parquet
-  - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist3-1/folding/unicluster40/eval.parquet
-  # target benchmark
-  - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist3-1/folding/benchmark/cameo2022.parquet
-  - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist3-1/folding/benchmark/casp15.parquet
-  - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist3-1/cfolding/benchmark/cameo2022.parquet
-  - /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist3-1/cfolding/benchmark/casp15.parquet
+  - name: plm
+    path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/sequence/uniref50/eval.parquet
+
+  - name: slm
+    path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/structure/unicluster40/eval.parquet
+
+  - name: p2s
+    path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/folding/unicluster40/eval.parquet
+
+  - name: psps
+    path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/cfolding/unicluster40/eval.parquet
+
+  - name: cameo2022_folding
+    path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/folding/benchmark/cameo2022.parquet
+
+  - name: casp15_folding
+    path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/folding/benchmark/casp15.parquet
+
+  - name: cameo2022_cfolding
+    path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/cfolding/benchmark/cameo2022.parquet
+
+  - name: casp15_cfolding
+    path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/cfolding/benchmark/casp15.parquet
+
 
 processing:
   cropping:             True

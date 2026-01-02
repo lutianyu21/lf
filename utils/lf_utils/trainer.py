@@ -29,6 +29,9 @@ from transformers.generation.configuration_utils import GenerationConfig
 from trl import SFTTrainer, SFTConfig
 from trl.trainer.utils import ConstantLengthDataset
 
+from utils.dplm_utils.dplm.vendor.openfold.openfold.utils import loss
+from utils.protenix_utils import rmsd
+
 from ..common import GlobalConstants
 from ..openfold_utils import OpenfoldProtein
 
@@ -289,42 +292,9 @@ class PackingFoldingTrainer(SFTTrainer):
         
         return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
     
-    @property
-    def dummy_metrics(self):
-        return dict(
-            # unique task id
-            tid=-1.0,
-            # plm evaluation
-            sequence_loss=1e5,
-            sequence_acc=0.0,
-            sequence_bleu=0.0,
-            # slm evaluation
-            structure_loss=1e5,
-            structure_acc=0.0,
-            structure_bleu=0.0,
-            # p2s evaluation
-            folding_loss=1e5,
-            folding_acc=0.0,
-            folding_bleu=0.0,
-            cfolding_loss=1e5,
-            cfolding_acc=0.0,
-            cfolding_bleu=0.0,
-            # benchmark
-            benchmark=-1.0,
-            ar_loss=1e5,
-            ar_acc=0.0,
-            ar_bleu=0.0,
-            tm_ar=0.0,
-            tm_vq=0.0,
-            rmsd_ar=1e5,
-            rmsd_vq=1e5,        
-        )
-    
-    
     # evaluation for protein sequence understanding: 
     # - eval/plm/sequence_loss
     # - eval/plm/sequence_acc
-    # - eval/plm/sequence_bleu
     @torch.no_grad()
     def _prediction_step_plm(
         self,
@@ -344,31 +314,27 @@ class PackingFoldingTrainer(SFTTrainer):
         eps_token_ids = output.logits[0].argmax(dim=-1)     # ....</seq><endoftext>
         sequence_loss = output.loss
         sequence_acc = (eps_token_ids[:-1] == target_token_ids[1:]).float().mean().item() * 100.0
-        sequence_bleu = sacrebleu.corpus_bleu(
-            [" ".join(map(str, eps_token_ids.cpu().tolist()))],
-            [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
-        ).score
         
         # logging metrics and the first 5 tokens
         logger.info(f"""
 ////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
-Sequence Loss/Acc/Bleu:     {sequence_loss.item():.4f}/{sequence_acc:.4f}/{sequence_bleu:.4f}
+Sequence Loss/Acc:      {sequence_loss.item():.4f}/{sequence_acc:.4f}
 """)
         metrics = dict(
-            tid=0.0,
             sequence_loss = sequence_loss.item(),
             sequence_acc = sequence_acc,
-            sequence_bleu = sequence_bleu,
         )
-        metrics = self.dummy_metrics | metrics
         model.train()
-        return (output.loss, {k:torch.tensor(v).to(model.device) for k, v in metrics.items()}, inputs['input_ids'])
+        return (
+            output.loss,
+            {k:torch.tensor(v).to(model.device) for k, v in metrics.items()},
+            inputs['input_ids']
+        )
     
     
     # evaluation for protein structure understanding: 
     # - eval/slm/structure_loss
     # - eval/slm/structure_acc
-    # - eval/slm/structure_bleu
     @torch.no_grad()
     def _prediction_step_slm(
         self,
@@ -387,37 +353,29 @@ Sequence Loss/Acc/Bleu:     {sequence_loss.item():.4f}/{sequence_acc:.4f}/{seque
         eps_token_ids = output.logits[0].argmax(dim=-1)     # ....</struct><endoftext>
         structure_loss = output.loss
         structure_acc = (eps_token_ids[:-1] == target_token_ids[1:]).float().mean().item() * 100.0
-        structure_bleu = sacrebleu.corpus_bleu(
-            [" ".join(map(str, eps_token_ids.cpu().tolist()))],
-            [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
-        ).score
         
         # logging metrics and the first 5 tokens
         logger.info(f"""
 ////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
-Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{structure_bleu:.4f}
+Structure Loss/Acc:     {structure_loss.item():.4f}/{structure_acc:.4f}
 """)
         metrics = dict(
-            tid=1.0,
             structure_loss = structure_loss.item(),
             structure_acc = structure_acc,
-            structure_bleu = structure_bleu,
         )
-        metrics = self.dummy_metrics | metrics
         model.train()
-        return (output.loss, {k:torch.tensor(v).to(model.device) for k, v in metrics.items()}, inputs['input_ids'])
+        return (
+            output.loss,
+            {k:torch.tensor(v).to(model.device) for k, v in metrics.items()},
+            inputs['input_ids']
+        )
     
     
     # evaluation for protein sequence-to-structure:
-    # - eval/p2s/structure_loss
-    # - eval/p2s/structure_acc
-    # - eval/p2s/structure_bleu
+    # - eval/p2s/struct_loss
+    # - eval/p2s/struct_acc
     # - eval/p2s/folding_loss
     # - eval/p2s/folding_acc
-    # - eval/p2s/folding_bleu
-    # - eval/p2s/cfolding_loss
-    # - eval/p2s/cfolding_acc
-    # - eval/p2s/cfolding_bleu
     @torch.no_grad()
     def _prediction_step_p2s(
         self,
@@ -430,74 +388,140 @@ Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{str
         start_time = time.time()
         model.eval()
         
-        # for inputs icl | seq | struct, we measure: 
-        # 1. whether seq is conditioned: model(struct) << model(seq | struct)               a.k.a structure metrics << folding metrics
-        # 2. whether icl is conditioned: model(seq | struct) << model(icl | seq | struct)   a.k.a folding metrics << icl metrics
         constant_helper = self.processor.constant_helper
-        icl_start = 0
-        seq_start = int(torch.where(
+        sequence_start = int(torch.where(
             inputs['labels'][0] == constant_helper['boseq_token_id'])[0][-1].int().item())
-        struct_start = int(torch.where(
+        structure_start = int(torch.where(
             inputs['labels'][0] == constant_helper['bostruct_token_id'])[0][-1].int().item())
-        icl_length = seq_start - icl_start
-        seq_length = struct_start - seq_start
-        struct_length = inputs['labels'].shape[1] - struct_start
+        sequence_length = structure_start - sequence_start
+        structure_length = inputs['labels'].shape[1] - structure_start
         
         def evalute_section(
             model: PreTrainedModel,
             inputs: Dict[str, Any],
             start: int,
-        ) -> Tuple[torch.Tensor, float, float]:
+        ) -> Tuple[torch.Tensor, float]:
             labels: torch.Tensor = inputs['labels'][:, start:]
             output = model(
                 input_ids=labels,
                 attention_mask=torch.ones_like(labels)
             )
-            target_token_ids = labels[0][-struct_length:]
-            eps_logits = output.logits[0][-struct_length:, :]
+            target_token_ids = labels[0][-structure_length:]
+            eps_logits = output.logits[0][-structure_length:, :]
             eps_token_ids = eps_logits.argmax(dim=-1)
             loss = torch.nn.functional.nll_loss(
                 input=torch.log_softmax(eps_logits, dim=-1)[:-1, :],
                 target=target_token_ids[1:]
             )
             acc = (eps_token_ids[:-1] == target_token_ids[1:]).float().mean().item() * 100.0
-            bleu = sacrebleu.corpus_bleu(
-                [" ".join(map(str, eps_token_ids[:-1].cpu().tolist()))],
-                [[" ".join(map(str, target_token_ids[1:].cpu().tolist()))]]
-            ).score
             del output
             torch.cuda.empty_cache()
-            return loss, acc, bleu
+            return loss, acc
         
         # 1. forward <struct>....</struct>
-        structure_loss, structure_acc, structure_bleu = evalute_section(model, inputs, struct_start)
+        structure_loss, structure_acc = evalute_section(model, inputs, structure_start)
         # 2. forward <seq>....</seq><struct>....</struct>
-        folding_loss, folding_acc, folding_bleu = evalute_section(model, inputs, seq_start)
-        # 3. forward <seq>....</struct><seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
-        cfolding_loss, cfolding_acc, cfolding_bleu = evalute_section(model, inputs, icl_start)
+        folding_loss, folding_acc = evalute_section(model, inputs, sequence_start)
         
         # logging metrics and the first 5 tokens
         logger.info(f"""
 ////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
-Structure Loss/Acc/Bleu:    {structure_loss.item():.4f}/{structure_acc:.4f}/{structure_bleu:.4f}
-Folding   Loss/Acc/Bleu:    {folding_loss.item():.4f}/{folding_acc:.4f}/{folding_bleu:.4f}
-CFolding  Loss/Acc/Bleu:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}/{cfolding_bleu:.4f}
+Structure Loss/Acc:    {structure_loss.item():.4f}/{structure_acc:.4f}
+Folding   Loss/Acc:    {folding_loss.item():.4f}/{folding_acc:.4f}
 """)
         metrics = dict(
-            tid=2.0,
-            folding_loss=folding_loss.item(),
-            folding_acc=folding_acc,
-            folding_bleu=folding_bleu,
-            cfolding_loss=cfolding_loss.item(),
-            cfolding_acc=cfolding_acc,
-            cfolding_bleu=cfolding_bleu,
             structure_loss=structure_loss.item(),
             structure_acc=structure_acc,
-            structure_bleu=structure_bleu,
+            folding_loss=folding_loss.item(),
+            folding_acc=folding_acc,
         )
-        metrics = self.dummy_metrics | metrics
         model.train()
-        return (torch.tensor(cfolding_loss, device=model.device), {k:torch.tensor(v, device=model.device) for k, v in metrics.items()}, inputs['input_ids'])
+        return (
+            torch.tensor(folding_loss, device=model.device),
+            {k:torch.tensor(v, device=model.device) for k, v in metrics.items()},
+            inputs['input_ids']
+        )
+    
+    
+    # evaluation for protein sequence-to-structure with context:
+    # - eval/p2s/struct_loss
+    # - eval/p2s/struct_acc
+    # - eval/p2s/folding_loss
+    # - eval/p2s/folding_acc
+    # - eval/p2s/cfolding_loss
+    # - eval/p2s/cfolding_acc
+    @torch.no_grad()
+    def _prediction_step_psps(
+        self,
+        model: PreTrainedModel,
+        inputs: Dict[str, Any],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[List[str]] = None
+    ):
+        assert inputs['labels'].shape[0] == 1, "p2s evaluation only supports batch size = 1."
+        start_time = time.time()
+        model.eval()
+        
+        constant_helper = self.processor.constant_helper
+        context_start = 0
+        sequence_start = int(torch.where(
+            inputs['labels'][0] == constant_helper['boseq_token_id'])[0][-1].int().item())
+        structure_start = int(torch.where(
+            inputs['labels'][0] == constant_helper['bostruct_token_id'])[0][-1].int().item())
+        context_length = sequence_start - context_start
+        sequence_length = structure_start - sequence_start
+        structure_length = inputs['labels'].shape[1] - structure_start
+        
+        def evalute_section(
+            model: PreTrainedModel,
+            inputs: Dict[str, Any],
+            start: int,
+        ) -> Tuple[torch.Tensor, float]:
+            labels: torch.Tensor = inputs['labels'][:, start:]
+            output = model(
+                input_ids=labels,
+                attention_mask=torch.ones_like(labels)
+            )
+            target_token_ids = labels[0][-structure_length:]
+            eps_logits = output.logits[0][-structure_length:, :]
+            eps_token_ids = eps_logits.argmax(dim=-1)
+            loss = torch.nn.functional.nll_loss(
+                input=torch.log_softmax(eps_logits, dim=-1)[:-1, :],
+                target=target_token_ids[1:]
+            )
+            acc = (eps_token_ids[:-1] == target_token_ids[1:]).float().mean().item() * 100.0
+            del output
+            torch.cuda.empty_cache()
+            return loss, acc
+        
+        # 1. forward <struct>....</struct>
+        structure_loss, structure_acc = evalute_section(model, inputs, structure_start)
+        # 2. forward <seq>....</seq><struct>....</struct>
+        folding_loss, folding_acc = evalute_section(model, inputs, sequence_start)
+        # 3. forward <seq>....</struct><seq>....</seq><struct>....</struct><seq>....</seq><struct>....</struct>
+        cfolding_loss, cfolding_acc = evalute_section(model, inputs, context_start)
+        
+        # logging metrics and the first 5 tokens
+        logger.info(f"""
+////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
+Structure Loss/Acc:    {structure_loss.item():.4f}/{structure_acc:.4f}
+Folding   Loss/Acc:    {folding_loss.item():.4f}/{folding_acc:.4f}
+CFolding  Loss/Acc:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}
+""")
+        metrics = dict(
+            structure_loss=structure_loss.item(),
+            structure_acc=structure_acc,
+            folding_loss=folding_loss.item(),
+            folding_acc=folding_acc,
+            cfolding_loss=cfolding_loss.item(),
+            cfolding_acc=cfolding_acc,
+        )
+        model.train()
+        return (
+            torch.tensor(cfolding_loss, device=model.device),
+            {k:torch.tensor(v, device=model.device) for k, v in metrics.items()},
+            inputs['input_ids']
+        )
     
     
     # ! IMPORTANT !
@@ -505,7 +529,7 @@ CFolding  Loss/Acc/Bleu:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}/{cfold
     # in-domain loss >> out-of-domain loss >> ar generation loss >> ar generation bleu >> reconstruction
     # --------------OOD------------------exposure--------------argmax---------------tokenizer--------------
     @torch.no_grad()
-    def _prediction_step_folding(
+    def _prediction_step_benchmark(
         self,
         model: PreTrainedModel,
         inputs: Dict[str, Any],
@@ -546,12 +570,6 @@ CFolding  Loss/Acc/Bleu:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}/{cfold
             logits_processor=[logits_processor],
         ) # type: ignore
         
-        ar_logits: torch.Tensor = torch.stack(ar.logits).permute(1, 0, 2)[0]            # <struct>....</struct><endoftext>
-        ar_loss = torch.nn.functional.nll_loss(
-            input=torch.log_softmax(ar_logits[: -1, :], dim=-1),                        # <struct>....</struct>
-            target=inputs['labels'][0, prompt_length :],                                # <struct>....</struct>
-            reduction='mean'
-        )
         target_token_ids = inputs['labels'][0, prompt_length :]                         # <struct>....</struct>
         ar_token_ids = ar.sequences[0, prompt_length : -1]                              # <struct>....</struct>
         ar_acc = (ar_token_ids == target_token_ids).float().mean().item()
@@ -569,33 +587,33 @@ CFolding  Loss/Acc/Bleu:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}/{cfold
         self.processor.to(device)
         p_vq = self.processor.multimodal_decode(target_token_ids, ref=p_nature)['entity'][0].to(device)
         p_ar = self.processor.multimodal_decode(ar_token_ids, ref=p_nature)['entity'][0].to(device)
-        # p_nature = p_nature.to(device)
+        # ar ---- vq ---- nature, where the former is up to ar modeling, the latter is up to vq reconstruction
         tm_vq, rmsd_l_vq, rmsd_g_vq = self.processor.compute_tm_align(p_vq, p_nature, ref=p_nature)
-        tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
-        
+        tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_vq, ref=p_nature)
+        tm_final, rmsd_l_final, rmsd_g_final = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
         metrics = dict(
-            tid=3.0,
-            benchmark=GlobalConstants.auto_numeric(split),
-            ar_loss=ar_loss.item(),
-            ar_acc=ar_acc,
-            ar_bleu=ar_bleu,
-            tm_ar=tm_ar,
-            tm_vq=tm_vq,
-            rmsd_ar=rmsd_l_ar,
-            rmsd_vq=rmsd_l_vq,
+            tm_vq = tm_vq,
+            tm_ar = tm_ar,
+            tm_final = tm_final,
+            rmsd_vq = rmsd_l_vq,
+            rmsd_ar = rmsd_l_ar,
+            rmsd_final = rmsd_l_final,
         )
-        metrics = self.dummy_metrics | metrics
         
         logger.info(
 f"""////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
-Target  Structure:          {self.processor.tokenizer.decode(target_token_ids.cpu().tolist()[:4])}...
-AR      Structure:          {self.processor.tokenizer.decode(ar_token_ids.cpu().tolist()[:4])}...
-AR Loss/Acc/Bleu:           {ar_loss.item():.4f}/{ar_acc:.4f}/{ar_bleu:.4f}
+Target  Structure:          {self.processor.tokenizer.decode(target_token_ids.cpu().tolist()[:50])}...
+AR      Structure:          {self.processor.tokenizer.decode(ar_token_ids.cpu().tolist()[:50])}...
 VQ v.s. Nature: TM-score =  {tm_vq:.4f}, RMSD_L = {rmsd_l_vq:.4f}, RMSD_G = {rmsd_g_vq:.4f}
-AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd_g_ar:.4f}
+AR v.s. VQ:     TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd_g_ar:.4f}
+AR v.s. Nature: TM-score =  {tm_final:.4f}, RMSD_L = {rmsd_l_final:.4f}, RMSD_G = {rmsd_g_final:.4f}
 """)
         model.train()
-        return (ar_loss, {k:torch.tensor(v).to(device) for k, v in metrics.items()}, inputs['input_ids'])
+        return (
+            torch.tensor(0.0, device=model.device),
+            {k:torch.tensor(v).to(device) for k, v in metrics.items()},
+            inputs['input_ids']
+        )
     
     
     @torch.no_grad()
@@ -613,76 +631,79 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
             return self._prediction_step_slm(model, inputs, prediction_loss_only, ignore_keys)
         elif split in ['p2s/unicluster40']:
             return self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
-        else:
-            return self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
-            # benchmarking, combine p2s + folding evaluation
-            # loss1, metrics1, inputs1 = self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
-            # torch.cuda.empty_cache()
-            # loss2, metrics2, inputs2 = self._prediction_step_folding(model, inputs, prediction_loss_only, ignore_keys)
-            # # merge metrics
-            # metrics1_keys = [
-            #     'structure_loss', 'structure_acc', 'structure_bleu',
-            #     'folding_loss', 'folding_acc', 'folding_bleu',
-            #     'cfolding_loss', 'cfolding_acc', 'cfolding_bleu'
-            # ]
-            # metrics2_keys = [
-            #     'tid', 'benchmark',
-            #     'ar_loss', 'ar_acc', 'ar_bleu',
-            #     'tm_ar', 'tm_vq',
-            #     'rmsd_ar', 'rmsd_vq'
-            # ]
-            # # ! WARN ! should ensure key ordering
-            # merged_metrics = {k:torch.tensor(v, device=model.device) for k, v in self.dummy_metrics.items()}
-            # merged_metrics = merged_metrics | {k: metrics1[k] for k in metrics1_keys} | {k: metrics2[k] for k in metrics2_keys}
-            # return (loss1, merged_metrics, inputs1)
+        elif split in ['psps/unicluster40']:
+            return self._prediction_step_psps(model, inputs, prediction_loss_only, ignore_keys)
+        elif split in ['psps/cameo2022', 'psps/casp15', 'psps/casp16']:
+            # TO test OOD, call exposure evaluation first
+            loss1, metrics1, inputs1 = self._prediction_step_psps(model, inputs, prediction_loss_only, ignore_keys)
+            torch.cuda.empty_cache()
+            loss2, metrics2, inputs2 = self._prediction_step_benchmark(model, inputs, prediction_loss_only, ignore_keys)
+            merged_metrics = metrics1 | metrics2
+            return (loss2, merged_metrics, inputs2)
+        elif split in ['p2s/cameo2022', 'p2s/casp15', 'p2s/casp16']:
+            # TO test OOD, call exposure evaluation first
+            loss1, metrics1, inputs1 = self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
+            torch.cuda.empty_cache()
+            loss2, metrics2, inputs2 = self._prediction_step_benchmark(model, inputs, prediction_loss_only, ignore_keys)
+            merged_metrics = metrics1 | metrics2
+            return (loss2, merged_metrics, inputs2)
     
-
+    
     @classmethod
     def compute_metrics(cls, eval_pred: EvalPrediction):
         preds: Dict[str, np.ndarray] = eval_pred.predictions # type: ignore
         df = pd.DataFrame({k: v for k, v in preds.items()})
-        df['tid'] = df['tid'].astype(int)
         metrics = {}
-        # group dataframe by tid
-        for tid, group in df.groupby('tid'):
-            logger.warning(f"Computing metrics for task id {tid} with {len(group)} samples.")
-            if tid == 0:
-                # pLM metrics
-                metrics['plm/sequence_loss']  = group['sequence_loss'].mean()
-                metrics['plm/sequence_acc']   = group['sequence_acc'].mean()
-                metrics['plm/sequence_bleu']  = group['sequence_bleu'].mean()
-            elif tid == 1:
-                # sLM metrics
-                metrics['slm/structure_loss'] = group['structure_loss'].mean()
-                metrics['slm/structure_acc']  = group['structure_acc'].mean()
-                metrics['slm/structure_bleu'] = group['structure_bleu'].mean()
-            elif tid == 2:
-                # p2s metrics
-                metrics['p2s/structure_loss'] = group['structure_loss'].mean()
-                metrics['p2s/structure_acc']  = group['structure_acc'].mean()
-                metrics['p2s/structure_bleu'] = group['structure_bleu'].mean()
-                metrics['p2s/folding_loss']   = group['folding_loss'].mean()
-                metrics['p2s/folding_acc']    = group['folding_acc'].mean()
-                metrics['p2s/folding_bleu']   = group['folding_bleu'].mean()                
-                metrics['p2s/cfolding_loss']  = group['cfolding_loss'].mean()
-                metrics['p2s/cfolding_acc']   = group['cfolding_acc'].mean()
-                metrics['p2s/cfolding_bleu']  = group['cfolding_bleu'].mean()
-            elif tid == 3:
-                # another group by `split` field
-                for split, split_group in group.groupby('benchmark'):
-                    prefix = GlobalConstants.auto_string(int(split)) + '/' # type: ignore
-                    # from ar setting
-                    metrics[prefix + 'tm_ar']     = split_group['tm_ar'].mean()
-                    metrics[prefix + 'tm_vq']     = split_group['tm_vq'].mean()
-                    metrics[prefix + 'rmsd_ar']   = split_group['rmsd_ar'].mean()
-                    metrics[prefix + 'rmsd_vq']   = split_group['rmsd_vq'].mean()
-                    metrics[prefix + 'ar_loss']   = split_group['ar_loss'].mean()
-                    metrics[prefix + 'ar_acc']    = split_group['ar_acc'].mean()
-                    metrics[prefix + 'ar_bleu']   = split_group['ar_bleu'].mean()
-            else:
-                raise NotImplementedError(f"Unknown task id {type(tid)} {tid} found during metrics computation.")
+
+        # TRICK: decide dataset type by checking metrics keys
+        is_benchmark = 'tm_ar' in df.columns
+        is_psps = 'cfolding_loss' in df.columns and not is_benchmark
+        is_p2s = 'folding_loss' in df.columns and not is_benchmark and not is_psps
+        is_plm = 'sequence_loss' in df.columns and not is_benchmark and not is_psps and not is_p2s
+        is_slm = 'structure_loss' in df.columns and not is_benchmark and not is_psps and not is_p2s
+        
+        if is_benchmark:
+            logger.info(f"[{len(df)}rows] Computing metrics for protein folding benchmark tasks.")
+            # for benchmarks, report mean & std
+            metrics['ar_acc']       = df['ar_acc'].mean()
+            metrics['ar_bleu']      = df['ar_bleu'].mean()
+            metrics['tm_ar_mean']   = df['tm_ar'].mean()
+            metrics['tm_ar_std']    = df['tm_ar'].std()
+            metrics['tm_vq_mean']   = df['tm_vq'].mean()
+            metrics['tm_vq_std']    = df['tm_vq'].std()
+            metrics['tm_final_mean'] = df['tm_final'].mean()
+            metrics['tm_final_std']  = df['tm_final'].std()
+            metrics['rmsd_ar_mean'] = df['rmsd_ar'].mean()
+            metrics['rmsd_ar_std']  = df['rmsd_ar'].std()
+            metrics['rmsd_vq_mean'] = df['rmsd_vq'].mean()
+            metrics['rmsd_vq_std']  = df['rmsd_vq'].std()
+        elif is_psps:
+            logger.info(f"[{len(df)}rows] Computing metrics for protein sequence-to-structure with context task.")
+            metrics['p2s/structure_loss'] = df['structure_loss'].mean()
+            metrics['p2s/structure_acc']  = df['structure_acc'].mean()
+            metrics['p2s/folding_loss']   = df['folding_loss'].mean()
+            metrics['p2s/folding_acc']    = df['folding_acc'].mean()             
+            metrics['p2s/cfolding_loss']  = df['cfolding_loss'].mean()
+            metrics['p2s/cfolding_acc']   = df['cfolding_acc'].mean()
+        elif is_p2s:
+            logger.info(f"[{len(df)}rows] Computing metrics for protein sequence-to-structure task.")
+            metrics['p2s/structure_loss'] = df['structure_loss'].mean()
+            metrics['p2s/structure_acc']  = df['structure_acc'].mean()
+            metrics['p2s/folding_loss']   = df['folding_loss'].mean()
+            metrics['p2s/folding_acc']    = df['folding_acc'].mean()
+        elif is_plm:
+            logger.info(f"[{len(df)}rows] Computing metrics for protein language modeling task.")
+            metrics['plm/sequence_loss']  = df['sequence_loss'].mean()
+            metrics['plm/sequence_acc']   = df['sequence_acc'].mean()
+        elif is_slm:
+            logger.info(f"[{len(df)}rows] Computing metrics for structure language modeling task.")
+            metrics['slm/structure_loss'] = df['structure_loss'].mean()
+            metrics['slm/structure_acc']  = df['structure_acc'].mean()
+        else:
+            raise NotImplementedError("Unknown evaluation prediction format found during metrics computation.")
         return metrics
 
+    
     @classmethod
     def formatting_func_concatenate_templates(cls, example: Dict[str, List[Any]]) -> List[str] | str:
         if isinstance(example['text'], str):

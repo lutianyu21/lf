@@ -109,26 +109,29 @@ def sft(config: DictConfig):
                 epoch += 1
         return IterableDataset.from_generator(gen, features=ds.features)
     
-    # dataset_eval = load_dataset('parquet', streaming=False, split='train', data_files=config_dataset.eval)
-    # for quick evaluation, resitrict to 1000 samples of each eval dataset
-    dataset_eval_small = []
-    for eval_ds in config_dataset.eval:
-        ds = load_dataset('parquet', streaming=False, split='train', data_files=eval_ds, features=features)
-        ds = ds.select(range(min(1000, len(ds)))) # type: ignore
-        dataset_eval_small.append(ds)
-    dataset_eval = datasets.concatenate_datasets(dataset_eval_small)
-    dataset_train = interleave_datasets(
-        datasets=[
-            make_perpetual(
-                load_dataset('parquet', streaming=True, split='train', data_files=fpath, features=features)
-            )
-            for i, fpath in enumerate(config_dataset.train)
-        ],    
-        probabilities=config_dataset.weight,
-        seed=2025,
-    )
+    # training dataset with proper interleaving
+    dataset_train = []
+    dataset_weight = []
+    for i, it in enumerate(config_dataset.train):
+        ds = make_perpetual(
+            load_dataset('parquet', streaming=True, split='train', data_files=it['path'], features=features)
+        )
+        dataset_train.append(ds)
+        dataset_weight.append(it['weight'])
+    dataset_train = interleave_datasets(dataset_train, dataset_weight, seed=2025)
     elapsed = time.time() - start_time
-    logger.info(f'[{int(elapsed)}s] Loaded dataset ...\n- {config_dataset.train}\n- {config_dataset.eval}')
+    start_time = time.time()
+    logger.info(f'[{int(elapsed)}s] Prepared training dataset ...\n- {config_dataset.train}')
+    
+    # evaluation dataset
+    dataset_eval = {}
+    for i, it in enumerate(config_dataset.eval):
+        ds = load_dataset('parquet', streaming=False, split='train', data_files=it['path'], features=features)
+        ds = ds.select(range(min(1000, len(ds)))) # type: ignore
+        dataset_eval[it['name']] = ds
+    elapsed = time.time() - start_time
+    start_time = time.time()
+    logger.info(f'[{int(elapsed)}s] Prepared evaluation dataset ...\n- {config_dataset.eval}')
     
     # prepare qwen3 tokenizer
     start_time = time.time()
@@ -175,7 +178,6 @@ def sft(config: DictConfig):
     qwen3_model.resize_token_embeddings(len(qwen2_tokenizer))
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Loaded and updated model ...')
-    
     
     # prepare trainer
     # HINT: for packing we have to use <|endoftext|> rather than <|im_end|>
