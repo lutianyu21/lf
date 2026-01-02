@@ -273,7 +273,7 @@ class PackingFoldingTrainer(SFTTrainer):
         return_outputs: bool = False,
         num_items_in_batch: Optional[torch.Tensor] = None,
     ):    
-        logger.warning(self.processor.tokenizer.decode(inputs['labels'][0].cpu().tolist()))
+        # logger.warning(self.processor.tokenizer.decode(inputs['labels'][0].cpu().tolist()))
         
         # if self.use_bitwise_cross_entropy:
         #     # (dplm2.5) https://arxiv.org/abs/2504.11454: bit-wise cross-entropy loss

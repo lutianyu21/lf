@@ -18,8 +18,9 @@ eval:
   - name: p2s
     path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/folding/unicluster40/eval.parquet
 
-  - name: psps
-    path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/cfolding/unicluster40/eval.parquet
+  # not for folding sft
+  # - name: psps
+  #   path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/cfolding/unicluster40/eval.parquet
 
   - name: cameo2022_folding
     path: /GenSIvePFS/users/lutianyu/lf/dataset/dataset_dist2/folding/benchmark/cameo2022.parquet
