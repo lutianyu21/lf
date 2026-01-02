@@ -1,6 +1,6 @@
 #!/bin/bash
 #===============================================================================
-# LLMFolding Training Script for Volces Cluster
+# LLMFolding SFT (Supervised Fine-Tuning) Script for Volces Cluster
 #===============================================================================
 HYDRA_FULL_ERROR=1
 # Project root
@@ -8,27 +8,29 @@ export LF_ROOT=/SPXvePFS/users/jtfeng/lf
 cd ${LF_ROOT}
 
 #-------------------------------------------------------------------------------
-# 1. TRAINING PARAMETERS (modify these for different experiments)
+# 1. SFT PARAMETERS (modify these for different experiments)
 #-------------------------------------------------------------------------------
 # Experiment configuration
-CONFIG_NAME="pretrain"                # Self-contained config template
-# CONFIG_NAME="v3-1_pt_volces"        # Use this for volces-specific config
+CONFIG_NAME="sft"                     # SFT config template
 # CONFIG_NAME="debug"                 # Use this for quick testing
 
 # Run name (used for checkpoint dir, wandb name, and config name)
-RUN_NAME="pt@tok3-1"
+RUN_NAME="sft@tok3-1@step14000"
 
 # Training datasets (Hydra list format: path1,path2,...)
+# SFT typically uses curated folding data
 TRAIN_FOLDING="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/unicluster40/train.parquet"
-TRAIN_STRUCTURE="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/structure/unicluster40/train.parquet"
-TRAIN_SEQUENCE="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist2/sequence/uniref50/train.parquet"
-TRAIN_DATA="${TRAIN_FOLDING},${TRAIN_STRUCTURE},${TRAIN_SEQUENCE}"
-TRAIN_WEIGHT="0.5,0.3,0.2"
+TRAIN_DATA="${TRAIN_FOLDING}"
+TRAIN_WEIGHT="1.0"
 
 # Evaluation datasets
 EVAL_CAMEO="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/cameo2022.parquet"
 EVAL_CASP15="/SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/casp15.parquet"
 EVAL_DATA="${EVAL_CAMEO},${EVAL_CASP15}"
+
+# Pretrained checkpoint to load model from (optional)
+# Set this to load model weights from a pretrained checkpoint
+RESUME_FROM="/SPXvePFS/share/jiangtao/checkpoints/LLMFolding/pt@tok3-1@shuffle/checkpoint-14000"
 
 # Tokenizer/Structure checkpoints (optional, uses defaults if not set)
 # Available tokenizers: v4-epoch=46-val_loss=0.1712.ckpt (default), v4-epoch=00, v4-ar-epoch=00
@@ -40,8 +42,8 @@ OUTPUT_ROOT="/SPXvePFS/share/jiangtao/checkpoints/LLMFolding"
 CHECKPOINT_DIR="${OUTPUT_ROOT}/${RUN_NAME}"
 
 # Batch size configuration
-# Global batch size = num_gpus × gradient_accumulation_steps × per_device_batch_size
-GLOBAL_BATCH_SIZE=256                 # Target global batch size
+# Global batch size = num_gpus * gradient_accumulation_steps * per_device_batch_size
+GLOBAL_BATCH_SIZE=64                  # Target global batch size
 PER_DEVICE_BATCH_SIZE=8               # Batch size per GPU
 
 # Training overrides (uncomment to override config defaults)
@@ -76,7 +78,7 @@ MASTER_ADDR=${MLP_WORKER_0_HOST:-localhost}
 MASTER_PORT=${MLP_WORKER_0_PORT:-${MASTER_PORT:-29505}}
 
 # Auto-calculate gradient accumulation steps
-# Formula: GLOBAL_BATCH_SIZE = num_gpus × gradient_accumulation_steps × per_device_batch_size
+# Formula: GLOBAL_BATCH_SIZE = num_gpus * gradient_accumulation_steps * per_device_batch_size
 NUM_GPUS=$((NNODES * NPROC_PER_NODE))
 GRADIENT_ACCUMULATION_STEPS=$((GLOBAL_BATCH_SIZE / (NUM_GPUS * PER_DEVICE_BATCH_SIZE)))
 # Ensure at least 1
@@ -97,7 +99,7 @@ export WANDB_PROJECT="LF-jt"
 export WANDB_NAME="${RUN_NAME}"                     # Inherited from RUN_NAME
 export WANDB_DIR=${OUTPUT_ROOT}                     # WandB logs under OUTPUT_ROOT
 export WANDB_IGNORE_GIT=True
-# export WANDB_MODE=offline                        # Uncomment for offline mode
+export WANDB_MODE=offline                          # Uncomment for offline mode
 
 # Cache
 export HF_DATASETS_CACHE=.cache/hf_datasets
@@ -111,7 +113,7 @@ cd "$LF_ROOT"
 mkdir -p ${CHECKPOINT_DIR}
 
 echo "============================================================"
-echo "LLMFolding Training - $(date)"
+echo "LLMFolding SFT Training - $(date)"
 echo "============================================================"
 if [ -n "$WANDB_BASE_URL" ]; then
     echo "WandB URL: https://app.bandw.top/${WANDB_ENTITY}/${WANDB_PROJECT}"
@@ -133,6 +135,9 @@ echo "RUN_NAME:             $RUN_NAME"
 echo "TRAIN_DATA:           $TRAIN_DATA"
 echo "EVAL_DATA:            $EVAL_DATA"
 echo "CHECKPOINT_DIR:       $CHECKPOINT_DIR"
+if [ -n "$RESUME_FROM" ]; then
+    echo "RESUME_FROM:          $RESUME_FROM"
+fi
 
 echo ""
 echo "=== Path Configuration ==="
@@ -157,8 +162,14 @@ echo "NUM_GPUS:             $NUM_GPUS"
 echo "GRADIENT_ACCUM_STEPS: $GRADIENT_ACCUMULATION_STEPS"
 echo "Effective batch size: $((NUM_GPUS * GRADIENT_ACCUMULATION_STEPS * PER_DEVICE_BATCH_SIZE))"
 
+# Build resume argument if checkpoint is specified
+RESUME_ARG=""
+if [ -n "$RESUME_FROM" ]; then
+    RESUME_ARG="+trainer.resume_from_checkpoint=${RESUME_FROM}"
+fi
+
 echo ""
-echo "=== Starting Training ==="
+echo "=== Starting SFT Training ==="
 $TORCHRUN \
     --nnodes=$NNODES \
     --nproc_per_node=$NPROC_PER_NODE \
@@ -174,7 +185,8 @@ $TORCHRUN \
     "trainer.gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS}" \
     "trainer.per_device_train_batch_size=${PER_DEVICE_BATCH_SIZE}" \
     "hydra.run.dir=${OUTPUT_ROOT}" \
+    $RESUME_ARG \
     $TRAIN_OVERRIDES
 
 echo ""
-echo "=== Training Completed - $(date) ==="
+echo "=== SFT Training Completed - $(date) ==="

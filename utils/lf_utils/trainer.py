@@ -612,13 +612,18 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
         ignore_keys: Optional[List[str]] = None
     ):
         split = inputs['split'][0]
-        if split in ['p/uniref50']:
+        # 路由逻辑：
+        # p/  → 序列评估 (pLM)
+        # s/  → 结构评估 (sLM)
+        # p2s/unicluster40, p2s/rcsb → 普通 folding 评估 (不含 AR generation)
+        # p2s/cameo*, p2s/casp* → benchmark 评估 (p2s + AR generation)
+        BENCHMARK_SPLITS = ['p2s/cameo2022', 'p2s/casp15', 'p2s/casp16']
+
+        if split.startswith('p/'):
             return self._prediction_step_plm(model, inputs, prediction_loss_only, ignore_keys)
-        elif split in ['s/unicluster40']:
+        elif split.startswith('s/'):
             return self._prediction_step_slm(model, inputs, prediction_loss_only, ignore_keys)
-        elif split in ['p2s/unicluster40']:
-            return self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
-        else:
+        elif split in BENCHMARK_SPLITS:
             # benchmarking, combine p2s + folding evaluation
             loss1, metrics1, inputs1 = self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
             torch.cuda.empty_cache()
@@ -639,7 +644,10 @@ AR v.s. Nature: TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rms
             merged_metrics = {k:torch.tensor(v, device=model.device) for k, v in self.dummy_metrics.items()}
             merged_metrics = merged_metrics | {k: metrics1[k] for k in metrics1_keys} | {k: metrics2[k] for k in metrics2_keys}
             return (loss1, merged_metrics, inputs1)
-    
+        else:
+            # 其他 p2s 数据 (如 p2s/unicluster40, p2s/rcsb)，只做 forward 评估不做 AR generation
+            return self._prediction_step_p2s(model, inputs, prediction_loss_only, ignore_keys)
+
 
     @classmethod
     def compute_metrics(cls, eval_pred: EvalPrediction):

@@ -15,18 +15,16 @@ LF_TOKENIZER_CKPT_ROOT = Path(os.environ.get("LF_TOKENIZER_CKPT_ROOT", "/SPXvePF
 
 
 DATASET_SPLIT = {
-    'p2s/dev':              0,
-    'p2s/cameo2022':        1,
-    'p2s/casp15':           2,
-    'p2s/casp16':           3,
-    'p2s/rcsb':             4,
-    'p2s/afdb_swissprot':   5,
-    'p2s/unicluster40':     6,
+    'p2s/cameo2022':        0,
+    'p2s/casp15':           1,
+    'p2s/casp16':           2,
+    'p2s/rcsb':             3,
+    'p2s/afdb_swissprot':   4,
+    'p2s/unicluster40':     5,
 }
 
 
 DATASET_RAW_ROOT = {
-    'p2s/dev':              (str(LF_DATA_ROOT / 'rcsb/raw'),                 '.cif'),
     'p2s/cameo2022':        (str(LF_DATA_ROOT / 'rcsb/raw'),                 '.cif'),
     'p2s/casp15':           (str(LF_DATA_ROOT / 'casp15/raw'),               '.pdb'),
     'p2s/casp16':           (str(LF_DATA_ROOT / 'casp16/raw'),               '.pdb'),

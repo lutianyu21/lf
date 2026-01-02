@@ -1,0 +1,96 @@
+#===============================================================================
+# LLMFolding SFT (Supervised Fine-Tuning) Configuration Template
+# A self-contained config that doesn't depend on other config files
+#===============================================================================
+
+#-------------------------------------------------------------------------------
+# Experiment
+#-------------------------------------------------------------------------------
+name: qwen3-0.6B-dist3-1@sft
+
+#-------------------------------------------------------------------------------
+# Dataset
+#-------------------------------------------------------------------------------
+dataset:
+  type: dist3
+
+  # Data paths (override via command line or script)
+  # SFT typically uses curated folding data
+  train:
+    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/unicluster40/train.parquet
+
+  # Sampling weights for each dataset (should match train list order)
+  weight:
+    - 1.0
+
+  # Evaluation data
+  eval:
+    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/cameo2022.parquet
+    - /SPXvePFS/share/llmfolding/lf/dataset/dataset_dist3-1/folding/benchmark/casp15.parquet
+
+  # Data processing
+  processing:
+    cropping:             True
+    masking:              False
+    concatenation:        False
+    concatenation_ratio:  0.0
+
+#-------------------------------------------------------------------------------
+# Language Model
+#-------------------------------------------------------------------------------
+lm:
+  model_type:   qwen3_0.6B
+  model_dir:    /SPXvePFS/model/Qwen3-0.6B
+
+#-------------------------------------------------------------------------------
+# Trainer (SFT-specific settings)
+#-------------------------------------------------------------------------------
+trainer:
+  # Logging
+  logging_strategy: steps
+  logging_steps: 1
+  save_strategy: steps
+  save_steps: 200
+  save_total_limit: 10
+  report_to: wandb
+  output_dir: dummy                   # Will be overwritten by pipe.py
+  overwrite_output_dir: True
+
+  # Optimizer
+  optim: adamw_torch
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  max_steps: 1000
+  warmup_steps: 200
+  learning_rate: 5e-4
+  lr_scheduler_type: polynomial
+  lr_scheduler_kwargs:
+    lr_end: 1e-5
+    power: 1.0
+
+  # Training
+  fp16: False
+  bf16: True
+  gradient_checkpointing: True
+  gradient_accumulation_steps: 1
+  per_device_train_batch_size: 8
+  packing: True
+  max_seq_length: 4096
+  dataset_text_field: text
+
+  # Evaluation
+  # Two-phase evaluation:
+  # - forward_eval (fast, decoding-free): runs at eval_steps
+  # - generation_eval (slow, with AR): runs at eval_generation_steps (defaults to save_steps)
+  per_device_eval_batch_size: 1
+  eval_strategy: steps
+  eval_steps: 200
+  # eval_generation_steps: 1000  # Uncomment to override (defaults to save_steps)
+
+#-------------------------------------------------------------------------------
+# Hydra
+#-------------------------------------------------------------------------------
+hydra:
+  output_subdir: null
+  run:
+    dir: .

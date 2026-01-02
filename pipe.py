@@ -168,12 +168,25 @@ def sft(config: DictConfig):
     
     # prepare qwen3 model
     start_time = time.time()
-    qwen3_model = AutoModelForCausalLM.from_pretrained(
-        config_lm.model_dir,
-        dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2"
-    )
-    qwen3_model.resize_token_embeddings(len(qwen2_tokenizer))
+    # Check if we should load from a pretrained checkpoint instead of base model
+    pretrained_ckpt = config_trainer.get('resume_from_checkpoint', None)
+    if pretrained_ckpt and os.path.exists(pretrained_ckpt):
+        # Load model from checkpoint (for SFT from pretrained)
+        logger.info(f'Loading model from checkpoint: {pretrained_ckpt}')
+        qwen3_model = AutoModelForCausalLM.from_pretrained(
+            pretrained_ckpt,
+            torch_dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2"
+        )
+        # No need to resize embeddings - checkpoint already has the right size
+    else:
+        # Load from base model directory
+        qwen3_model = AutoModelForCausalLM.from_pretrained(
+            config_lm.model_dir,
+            torch_dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2"
+        )
+        qwen3_model.resize_token_embeddings(len(qwen2_tokenizer))
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Loaded and updated model ...')
     
