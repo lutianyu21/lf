@@ -31,7 +31,7 @@ dataset:
   # Data processing
   processing:
     cropping:             True
-    masking:              False
+    masking:              True    # Only compute loss on structure tokens
     concatenation:        False
     concatenation_ratio:  0.0
 
@@ -50,7 +50,7 @@ trainer:
   logging_strategy: steps
   logging_steps: 1
   save_strategy: steps
-  save_steps: 200
+  save_steps: 1000
   save_total_limit: 10
   report_to: wandb
   output_dir: dummy                   # Will be overwritten by pipe.py
@@ -58,14 +58,15 @@ trainer:
 
   # Optimizer
   optim: adamw_torch
-  weight_decay: 0.01
+  weight_decay: 0.0
   max_grad_norm: 1.0
-  max_steps: 1000
+  num_train_epochs: 3          # Stop after 3 epochs
+  max_steps: 1000              # Or stop after 1000 steps (whichever comes first)
   warmup_steps: 200
-  learning_rate: 5e-4
+  learning_rate: 5e-5
   lr_scheduler_type: polynomial
   lr_scheduler_kwargs:
-    lr_end: 1e-5
+    lr_end: 5e-6
     power: 1.0
 
   # Training

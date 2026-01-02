@@ -168,27 +168,19 @@ def sft(config: DictConfig):
     
     # prepare qwen3 model
     start_time = time.time()
-    # Check if we should load from a pretrained checkpoint instead of base model
-    pretrained_ckpt = config_trainer.get('resume_from_checkpoint', None)
-    if pretrained_ckpt and os.path.exists(pretrained_ckpt):
-        # Load model from checkpoint (for SFT from pretrained)
-        logger.info(f'Loading model from checkpoint: {pretrained_ckpt}')
-        qwen3_model = AutoModelForCausalLM.from_pretrained(
-            pretrained_ckpt,
-            torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2"
-        )
-        # No need to resize embeddings - checkpoint already has the right size
-    else:
-        # Load from base model directory
-        qwen3_model = AutoModelForCausalLM.from_pretrained(
-            config_lm.model_dir,
-            torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2"
-        )
-        qwen3_model.resize_token_embeddings(len(qwen2_tokenizer))
+    logger.info(f'Loading model from: {config_lm.model_dir}')
+    qwen3_model = AutoModelForCausalLM.from_pretrained(
+        config_lm.model_dir,
+        torch_dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2"
+    )
+    # Resize embeddings if needed (safe to call even if size matches)
+    qwen3_model.resize_token_embeddings(len(qwen2_tokenizer))
     elapsed = time.time() - start_time
     logger.info(f'[{int(elapsed)}s] Loaded and updated model ...')
+
+    # Convert config_trainer to dict for SFTConfig
+    config_trainer_dict = OmegaConf.to_container(config_trainer, resolve=True)
     
     
     # prepare trainer
@@ -202,7 +194,7 @@ def sft(config: DictConfig):
         processor=protein_processor,
         model=qwen3_model,
         tokenizer=qwen2_tokenizer,
-        args=SFTConfig(**config_trainer),
+        args=SFTConfig(**config_trainer_dict),
         train_dataset=dataset_train, # type: ignore
         eval_dataset=dataset_eval,   # type: ignore
         eval_packing=False,
