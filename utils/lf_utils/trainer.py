@@ -618,6 +618,8 @@ CFolding  Loss/Acc:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}
         tm_ar, rmsd_l_ar, rmsd_g_ar = self.processor.compute_tm_align(p_ar, p_vq, ref=p_nature)
         tm_final, rmsd_l_final, rmsd_g_final = self.processor.compute_tm_align(p_ar, p_nature, ref=p_nature)
         metrics = dict(
+            ar_acc = ar_acc,
+            ar_bleu = ar_bleu,
             tm_vq = tm_vq,
             tm_ar = tm_ar,
             tm_final = tm_final,
