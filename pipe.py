@@ -122,7 +122,7 @@ def sft(config: DictConfig):
     elapsed = time.time() - start_time
     start_time = time.time()
     for it in config_dataset.train:
-        logger.info(f'[{int(elapsed)}s] Prepared training dataset ({it.name}) from {it.path} ...')
+        logger.info(f'[{int(elapsed)}s] Prepared training dataset({it.name}) from {it.path} ...')
     
     # evaluation dataset
     dataset_eval = {}
@@ -133,7 +133,7 @@ def sft(config: DictConfig):
     elapsed = time.time() - start_time
     start_time = time.time()
     for it in config_dataset.eval:
-        logger.info(f'[{int(elapsed)}s] Prepared evaluation dataset ({it.name}) from {it.path} ...')
+        logger.info(f'[{int(elapsed)}s] Prepared evaluation dataset({it.name}) from {it.path} ...')
     
     # prepare qwen3 tokenizer
     start_time = time.time()

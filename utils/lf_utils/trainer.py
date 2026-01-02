@@ -104,13 +104,15 @@ class PackingFoldingTrainer(SFTTrainer):
         """Create a [`~torch.utils.data.DataLoader`] from the given dataset."""
 
         data_collator = self.data_collator
-        if is_datasets_available() and isinstance(dataset, datasets.Dataset):
-            dataset = self._remove_unused_columns(dataset, description=description)
-        else:
-            data_collator = self._get_collator_with_removed_columns(self.data_collator, description=description)
             
         # PLUGIN: customized data collator for evaluation
-        if not is_training:
+        if is_training:
+            if is_datasets_available() and isinstance(dataset, datasets.Dataset):
+                dataset = self._remove_unused_columns(dataset, description=description)
+            else:
+                data_collator = self._get_collator_with_removed_columns(self.data_collator, description=description)
+        else:
+            logger.warning("Using customized evaluation data collator ...")
             data_collator = self._eval_collator
 
         dataloader_params = {
@@ -271,7 +273,7 @@ class PackingFoldingTrainer(SFTTrainer):
         return_outputs: bool = False,
         num_items_in_batch: Optional[torch.Tensor] = None,
     ):    
-        # logger.warning(self.processor.tokenizer.decode(inputs['labels'][0].cpu().tolist()))
+        logger.warning(self.processor.tokenizer.decode(inputs['labels'][0].cpu().tolist()))
         
         # if self.use_bitwise_cross_entropy:
         #     # (dplm2.5) https://arxiv.org/abs/2504.11454: bit-wise cross-entropy loss
