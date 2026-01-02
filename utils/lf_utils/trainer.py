@@ -1,9 +1,7 @@
-from ast import arg
-from calendar import c
+from functools import partial
 import random
-from sys import prefix
 import time
-from typing import Any, Dict, Optional, List, Text, Tuple, Union, cast
+from typing import Any, Dict, Optional, List, Text, Tuple, Union, Callable, cast
 import os
 from pathlib import Path
 import warnings
@@ -13,9 +11,10 @@ import colorlog
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.utils
 import torch.utils.data
-import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset, IterableDataset, RandomSampler, SequentialSampler
 
 import datasets
 from datasets import Dataset
@@ -26,8 +25,11 @@ from transformers import (
 )
 import sacrebleu
 from transformers.generation.configuration_utils import GenerationConfig
+from transformers.utils.import_utils import is_datasets_available
+from transformers.trainer_utils import seed_worker
 from trl import SFTTrainer, SFTConfig
 from trl.trainer.utils import ConstantLengthDataset
+
 
 from utils.dplm_utils.dplm.vendor.openfold.openfold.utils import loss
 from utils.protenix_utils import rmsd
@@ -88,36 +90,58 @@ class PackingFoldingTrainer(SFTTrainer):
         self._concatenation_ratio = kwargs.pop('concatenation_ratio', 0.0)
         super().__init__(*args, **kwargs)
         
-    
-    def get_eval_dataloader(self, eval_dataset: Any = None) -> torch.utils.data.DataLoader:
-        if eval_dataset is None and self.eval_dataset is None:
-            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+    # WARN: get_eval_dataloader() is just a adaptive interface
+    # we override _get_dataloader() to control dataloader creation
+    def _get_dataloader(
+        self,
+        dataset: Dataset,
+        description: str,
+        batch_size: int,
+        sampler_fn: Optional[Callable[[Dataset], torch.utils.data.Sampler]] = None,
+        is_training: bool = False,
+        dataloader_key: Optional[str] = None,
+    ) -> DataLoader:
+        """Create a [`~torch.utils.data.DataLoader`] from the given dataset."""
 
-        # If we have persistent workers, don't do a fork bomb especially as eval datasets
-        # don't change during training
-        if hasattr(self, "_eval_dataloader") and self.args.dataloader_persistent_workers:
-            return self.accelerator.prepare(self._eval_dataloader)
-        eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
-        data_collator = self._eval_collator
+        data_collator = self.data_collator
+        if is_datasets_available() and isinstance(dataset, datasets.Dataset):
+            dataset = self._remove_unused_columns(dataset, description=description)
+        else:
+            data_collator = self._get_collator_with_removed_columns(self.data_collator, description=description)
+            
+        # PLUGIN: customized data collator for evaluation
+        if not is_training:
+            data_collator = self._eval_collator
+
         dataloader_params = {
-            "batch_size": self.args.eval_batch_size,
+            "batch_size": batch_size,
             "collate_fn": data_collator,
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
             "persistent_workers": self.args.dataloader_persistent_workers,
         }
 
-        if not isinstance(eval_dataset, torch.utils.data.IterableDataset):
-            dataloader_params["sampler"] = self._get_eval_sampler(eval_dataset)
+        if not isinstance(dataset, torch.utils.data.IterableDataset):
+            if sampler_fn is not None:
+                dataloader_params["sampler"] = sampler_fn(dataset)
             dataloader_params["drop_last"] = self.args.dataloader_drop_last
             dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+            if is_training:
+                dataloader_params["worker_init_fn"] = partial(
+                    seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
+                )
 
-        # accelerator.free_memory() will destroy the references, so
-        # we need to store the non-prepared version
-        eval_dataloader = torch.utils.data.DataLoader(eval_dataset, **dataloader_params)
-        if self.args.dataloader_persistent_workers:
-            self._eval_dataloader = eval_dataloader
-        return self.accelerator.prepare(eval_dataloader)
+        dataloader = self.accelerator.prepare(DataLoader(dataset, **dataloader_params)) # type: ignore
+
+        # Store the prepared dataloader for subsequent evaluations if using persistent workers.
+        if dataloader_key is not None and self.args.dataloader_persistent_workers:
+            if hasattr(self, "_eval_dataloaders"):
+                self._eval_dataloaders[dataloader_key] = dataloader
+            else:
+                self._eval_dataloaders = {dataloader_key: dataloader}
+
+        return dataloader
+    
     
     def _prepare_packed_dataloader(
         self,

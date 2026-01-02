@@ -121,7 +121,8 @@ def sft(config: DictConfig):
     dataset_train = interleave_datasets(dataset_train, dataset_weight, seed=2025)
     elapsed = time.time() - start_time
     start_time = time.time()
-    logger.info(f'[{int(elapsed)}s] Prepared training dataset ...\n- {config_dataset.train}')
+    for it in config_dataset.train:
+        logger.info(f'[{int(elapsed)}s] Prepared training dataset ({it.name}) from {it.path} ...')
     
     # evaluation dataset
     dataset_eval = {}
@@ -131,7 +132,8 @@ def sft(config: DictConfig):
         dataset_eval[it['name']] = ds
     elapsed = time.time() - start_time
     start_time = time.time()
-    logger.info(f'[{int(elapsed)}s] Prepared evaluation dataset ...\n- {config_dataset.eval}')
+    for it in config_dataset.eval:
+        logger.info(f'[{int(elapsed)}s] Prepared evaluation dataset ({it.name}) from {it.path} ...')
     
     # prepare qwen3 tokenizer
     start_time = time.time()
