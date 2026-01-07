@@ -32,15 +32,15 @@ from pathlib import Path
 #     merge_shards=False
 # )
 
-name = 'casp16'
+name = 'cameo2022'
 
 DataEngine.pipe(
     dataset_dir=Path("/GenSIvePFS/users/lutianyu/lf/tmp/zhangzhe"),
     bq_path=Path(f"/GenSIvePFS/users/lutianyu/lf/tmp/zhangzhe/bq_{name}.parquet"),
     bsz=32,
-    num_consumers=1,
+    num_consumers=2,
     num_producers=10,
-    tokenizer_name="dist3",
+    tokenizer_name="dplm",
     dataset_name=f"psps/{name}",
     ops=['merge'],
 )

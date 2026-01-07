@@ -1,0 +1,16 @@
+defaults:
+  - dataset: dplm_pt
+  - lm: qwen3
+  - trainer: pt
+  - _self_
+
+# overwrite experiment config
+name: dplm@pt@0107
+
+lm:
+  model_dir: /GenSIvePFS/model/Qwen3-4B
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

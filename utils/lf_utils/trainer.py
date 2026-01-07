@@ -80,6 +80,10 @@ class PackingFoldingTrainer(SFTTrainer):
         self.processor = processor
         self.use_bitwise_cross_entropy = kwargs.pop('use_bitwise_cross_entropy', False)
         
+        # 
+        self._constant_helper = processor.constant_helper
+        
+        
         self._eval_collator = ExtraColumnCollator(**kwargs)
         self._seed = 42
         self._cropping = kwargs.pop('cropping', False)
@@ -318,6 +322,7 @@ class PackingFoldingTrainer(SFTTrainer):
         
         return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
     
+    
     # evaluation for protein sequence understanding: 
     # - eval/plm/sequence_loss
     # - eval/plm/sequence_acc
@@ -329,28 +334,36 @@ class PackingFoldingTrainer(SFTTrainer):
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None
     ):
-        assert inputs['labels'].shape[0] == 1, "pLM evaluation only supports batch size = 1."
-        assert inputs['split'][0] in ['p/uniref50'], f"pLM evaluation only supports uniref50 dataset, but got {inputs['split']}."
-        start_time = time.time()
-        model.eval()
         
+        if inputs['labels'].shape[0] > 1:
+            raise NotImplementedError("pLM evaluation only supports batch size = 1 for now.")
+        
+        if inputs['split'][0] not in ['p/uniref50']:
+            raise ValueError(f"pLM evaluation only supports uniref50 dataset, but got {inputs['split']}.")
+            
         # modeling protein sequence understanding p(sequence)
-        output = model(input_ids=inputs['labels'], labels=inputs['labels'], attention_mask=torch.ones_like(inputs['labels']))
-        target_token_ids = inputs['labels'][0]              # <seq>....</seq>
+        start_time = time.time()
+        output = model(
+            input_ids=inputs['labels'],
+            labels=inputs['labels'],
+            attention_mask=torch.ones_like(inputs['labels'])
+        )
+        tar_token_ids = inputs['labels'][0]                 # <seq>....</seq>
         eps_token_ids = output.logits[0].argmax(dim=-1)     # ....</seq><endoftext>
         sequence_loss = output.loss
-        sequence_acc = (eps_token_ids[:-1] == target_token_ids[1:]).float().mean().item() * 100.0
+        sequence_acc = (eps_token_ids[:-1] == tar_token_ids[1:]).float().mean().item() * 100.0
         
         # logging metrics and the first 5 tokens
         logger.info(f"""
 ////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
+Predicted Tokens:       <seq>{self.processor.tokenizer.decode(eps_token_ids.cpu().tolist()[:50])}...
+Target Tokens:          {self.processor.tokenizer.decode(tar_token_ids.cpu().tolist()[:50])}...
 Sequence Loss/Acc:      {sequence_loss.item():.4f}/{sequence_acc:.4f}
 """)
         metrics = dict(
             sequence_loss = sequence_loss.item(),
-            sequence_acc = sequence_acc,
+            sequence_acc  = sequence_acc,
         )
-        model.train()
         return (
             output.loss,
             {k:torch.tensor(v).to(model.device) for k, v in metrics.items()},
@@ -369,27 +382,33 @@ Sequence Loss/Acc:      {sequence_loss.item():.4f}/{sequence_acc:.4f}
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None
     ):
-        assert inputs['labels'].shape[0] == 1, "sLM evaluation only supports batch size = 1."
-        start_time = time.time()
-        model.eval()
+        if inputs['labels'].shape[0] > 1:
+            raise NotImplementedError("sLM evaluation only supports batch size = 1 for now.")
+        
+        if inputs['split'][0] not in ['s/unicluster40']:
+            raise ValueError(f"sLM evaluation only supports unicluster40 dataset, but got {inputs['split']}.")
         
         # modeling protein structure understanding p(structure)
-        output = model(input_ids=inputs['labels'], labels=inputs['labels'], attention_mask=torch.ones_like(inputs['labels']))
-        target_token_ids = inputs['labels'][0]              # <struct>....</struct>
+        start_time = time.time()
+        output = model(
+            input_ids=inputs['labels'], labels=inputs['labels'], attention_mask=torch.ones_like(inputs['labels'])
+        )
+        tar_token_ids = inputs['labels'][0]                 # <struct>....</struct>
         eps_token_ids = output.logits[0].argmax(dim=-1)     # ....</struct><endoftext>
         structure_loss = output.loss
-        structure_acc = (eps_token_ids[:-1] == target_token_ids[1:]).float().mean().item() * 100.0
+        structure_acc = (eps_token_ids[:-1] == tar_token_ids[1:]).float().mean().item() * 100.0
         
         # logging metrics and the first 5 tokens
         logger.info(f"""
 ////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
+Predicted Tokens:       <struct>{self.processor.tokenizer.decode(eps_token_ids.cpu().tolist()[:50])}...
+Target Tokens:          {self.processor.tokenizer.decode(tar_token_ids.cpu().tolist()[:50])}...
 Structure Loss/Acc:     {structure_loss.item():.4f}/{structure_acc:.4f}
 """)
         metrics = dict(
             structure_loss = structure_loss.item(),
-            structure_acc = structure_acc,
+            structure_acc  = structure_acc,
         )
-        model.train()
         return (
             output.loss,
             {k:torch.tensor(v).to(model.device) for k, v in metrics.items()},
@@ -410,38 +429,38 @@ Structure Loss/Acc:     {structure_loss.item():.4f}/{structure_acc:.4f}
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None
     ):
-        assert inputs['labels'].shape[0] == 1, "p2s evaluation only supports batch size = 1."
-        start_time = time.time()
-        model.eval()
         
-        constant_helper = self.processor.constant_helper
-        sequence_start = int(torch.where(
-            inputs['labels'][0] == constant_helper['boseq_token_id'])[0][-1].int().item())
-        structure_start = int(torch.where(
-            inputs['labels'][0] == constant_helper['bostruct_token_id'])[0][-1].int().item())
-        sequence_length = structure_start - sequence_start
+        if inputs['labels'].shape[0] > 1:
+            raise NotImplementedError("p2s evaluation only supports batch size = 1 for now.")
+        
+        if inputs['split'][0] not in ['p2s/unicluster40', 'p2s/cameo2022', 'p2s/casp15', 'p2s/casp16']:
+            raise ValueError(f"p2s evaluation only supports unicluster40 dataset, but got {inputs['split']}.")
+        
+        start_time = time.time()
+        sequence_start   = torch.where(inputs['labels'][0] == self._constant_helper['boseq_token_id'])[0][-1].int().item()
+        structure_start  = torch.where(inputs['labels'][0] == self._constant_helper['bostruct_token_id'])[0][-1].int().item()
+        sequence_length  = structure_start - sequence_start
         structure_length = inputs['labels'].shape[1] - structure_start
         
-        def evalute_section(
-            model: PreTrainedModel,
-            inputs: Dict[str, Any],
-            start: int,
-        ) -> Tuple[torch.Tensor, float]:
+        tmp: Any = {}
+        def evalute_section(model, inputs, start) -> Tuple[torch.Tensor, float]:
             labels: torch.Tensor = inputs['labels'][:, start:]
             output = model(
                 input_ids=labels,
                 attention_mask=torch.ones_like(labels)
             )
-            target_token_ids = labels[0][-structure_length:]
-            eps_logits = output.logits[0][-structure_length:, :]
+            eps_logits: torch.Tensor = output.logits[0][-structure_length:, :]
             eps_token_ids = eps_logits.argmax(dim=-1)
+            tar_token_ids = labels[0][-structure_length:]
             loss = torch.nn.functional.nll_loss(
                 input=torch.log_softmax(eps_logits, dim=-1)[:-1, :],
-                target=target_token_ids[1:]
+                target=tar_token_ids[1:]
             )
-            acc = (eps_token_ids[:-1] == target_token_ids[1:]).float().mean().item() * 100.0
+            acc = (eps_token_ids[:-1] == tar_token_ids[1:]).float().mean().item() * 100.0
             del output
             torch.cuda.empty_cache()
+            tmp[0] = eps_token_ids.detach()
+            tmp[1] = tar_token_ids.detach()
             return loss, acc
         
         # 1. forward <struct>....</struct>
@@ -452,16 +471,17 @@ Structure Loss/Acc:     {structure_loss.item():.4f}/{structure_acc:.4f}
         # logging metrics and the first 5 tokens
         logger.info(f"""
 ////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
-Structure Loss/Acc:    {structure_loss.item():.4f}/{structure_acc:.4f}
-Folding   Loss/Acc:    {folding_loss.item():.4f}/{folding_acc:.4f}
+Predicted Tokens:       <struct>{self.processor.tokenizer.decode(tmp[0].cpu().tolist()[:50])}...
+Target Tokens:          {self.processor.tokenizer.decode(tmp[1].cpu().tolist()[:50])}...
+Structure Loss/Acc:     {structure_loss.item():.4f}/{structure_acc:.4f}
+Folding   Loss/Acc:     {folding_loss.item():.4f}/{folding_acc:.4f}
 """)
         metrics = dict(
-            structure_loss=structure_loss.item(),
-            structure_acc=structure_acc,
-            folding_loss=folding_loss.item(),
-            folding_acc=folding_acc,
+            structure_loss = structure_loss.item(),
+            structure_acc  = structure_acc,
+            folding_loss   = folding_loss.item(),
+            folding_acc    = folding_acc,
         )
-        model.train()
         return (
             torch.tensor(folding_loss, device=model.device),
             {k:torch.tensor(v, device=model.device) for k, v in metrics.items()},
@@ -484,40 +504,40 @@ Folding   Loss/Acc:    {folding_loss.item():.4f}/{folding_acc:.4f}
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None
     ):
-        assert inputs['labels'].shape[0] == 1, "p2s evaluation only supports batch size = 1."
-        start_time = time.time()
-        model.eval()
         
-        constant_helper = self.processor.constant_helper
+        if inputs['labels'].shape[0] > 1:
+            raise NotImplementedError("p2s evaluation only supports batch size = 1 for now.")
+        
+        if inputs['split'][0] not in ['psps/unicluster40', 'psps/cameo2022', 'psps/casp15', 'psps/casp16']:
+            raise ValueError(f"p2s evaluation only supports unicluster40/cameo2022/casp15/casp16 dataset, but got {inputs['split']}.")
+        
+        start_time = time.time()
         context_start = 0
-        sequence_start = int(torch.where(
-            inputs['labels'][0] == constant_helper['boseq_token_id'])[0][-1].int().item())
-        structure_start = int(torch.where(
-            inputs['labels'][0] == constant_helper['bostruct_token_id'])[0][-1].int().item())
+        sequence_start = torch.where(inputs['labels'][0] == self._constant_helper['boseq_token_id'])[0][-1].int().item()
+        structure_start = torch.where(inputs['labels'][0] == self._constant_helper['bostruct_token_id'])[0][-1].int().item()
         context_length = sequence_start - context_start
         sequence_length = structure_start - sequence_start
         structure_length = inputs['labels'].shape[1] - structure_start
         
-        def evalute_section(
-            model: PreTrainedModel,
-            inputs: Dict[str, Any],
-            start: int,
-        ) -> Tuple[torch.Tensor, float]:
+        tmp: Any = {}
+        def evalute_section(model, inputs, start) -> Tuple[torch.Tensor, float]:
             labels: torch.Tensor = inputs['labels'][:, start:]
             output = model(
                 input_ids=labels,
                 attention_mask=torch.ones_like(labels)
             )
-            target_token_ids = labels[0][-structure_length:]
+            tar_token_ids = labels[0][-structure_length:]
             eps_logits = output.logits[0][-structure_length:, :]
             eps_token_ids = eps_logits.argmax(dim=-1)
             loss = torch.nn.functional.nll_loss(
                 input=torch.log_softmax(eps_logits, dim=-1)[:-1, :],
-                target=target_token_ids[1:]
+                target=tar_token_ids[1:]
             )
-            acc = (eps_token_ids[:-1] == target_token_ids[1:]).float().mean().item() * 100.0
+            acc = (eps_token_ids[:-1] == tar_token_ids[1:]).float().mean().item() * 100.0
             del output
             torch.cuda.empty_cache()
+            tmp[0] = eps_token_ids.detach()
+            tmp[1] = tar_token_ids.detach()
             return loss, acc
         
         # 1. forward <struct>....</struct>
@@ -530,19 +550,20 @@ Folding   Loss/Acc:    {folding_loss.item():.4f}/{folding_acc:.4f}
         # logging metrics and the first 5 tokens
         logger.info(f"""
 ////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
-Structure Loss/Acc:    {structure_loss.item():.4f}/{structure_acc:.4f}
-Folding   Loss/Acc:    {folding_loss.item():.4f}/{folding_acc:.4f}
-CFolding  Loss/Acc:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}
+Predicted Tokens:       <struct>{self.processor.tokenizer.decode(tmp[0].cpu().tolist()[:50])}...
+Target Tokens:          {self.processor.tokenizer.decode(tmp[1].cpu().tolist()[:50])}...
+Structure Loss/Acc:     {structure_loss.item():.4f}/{structure_acc:.4f}
+Folding   Loss/Acc:     {folding_loss.item():.4f}/{folding_acc:.4f}
+CFolding  Loss/Acc:     {cfolding_loss.item():.4f}/{cfolding_acc:.4f}
 """)
         metrics = dict(
-            structure_loss=structure_loss.item(),
-            structure_acc=structure_acc,
-            folding_loss=folding_loss.item(),
-            folding_acc=folding_acc,
-            cfolding_loss=cfolding_loss.item(),
-            cfolding_acc=cfolding_acc,
+            structure_loss = structure_loss.item(),
+            structure_acc  = structure_acc,
+            folding_loss   = folding_loss.item(),
+            folding_acc    = folding_acc,
+            cfolding_loss  = cfolding_loss.item(),
+            cfolding_acc   = cfolding_acc,
         )
-        model.train()
         return (
             torch.tensor(cfolding_loss, device=model.device),
             {k:torch.tensor(v, device=model.device) for k, v in metrics.items()},
@@ -551,9 +572,6 @@ CFolding  Loss/Acc:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}
     
     
     # ! IMPORTANT !
-    # correlation between eval-loss & folding metrics is not clear yet
-    # in-domain loss >> out-of-domain loss >> ar generation loss >> ar generation bleu >> reconstruction
-    # --------------OOD------------------exposure--------------argmax---------------tokenizer--------------
     @torch.no_grad()
     def _prediction_step_benchmark(
         self,
@@ -562,13 +580,13 @@ CFolding  Loss/Acc:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None
     ):
-        assert inputs['labels'].shape[0] == 1, "folding evaluation only supports batch size = 1."
+        if inputs['labels'].shape[0] != 1:
+            raise NotImplementedError("folding evaluation only supports batch size = 1.")
+        
         start_time = time.time()
-        model.eval()
         
         # {prompt} | <seq>....</seq> | <struct>....</struct>
-        constant_helper = self.processor.constant_helper
-        struct_start = int(torch.where(inputs['labels'][0] == constant_helper['bostruct_token_id'])[0][-1].int().item())
+        struct_start = torch.where(inputs['labels'][0] == self._constant_helper['bostruct_token_id'])[0][-1].int().item()
         prompt_length = struct_start # wo/ <struct> token itself
         answer_length = inputs['labels'].shape[1] - prompt_length
         
@@ -578,8 +596,10 @@ CFolding  Loss/Acc:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}
             use_cache=True,
             eos_token_id=self.processor.tokenizer.eos_token_id,
             pad_token_id=self.processor.tokenizer.pad_token_id,
-            do_sample=False,
-            max_new_tokens=12*1024,
+            do_sample=True,
+            top_p=0.9,
+            temperature=0.7,
+            max_new_tokens=10*1024,
             return_dict_in_generate=True,
             output_scores=False,
             output_logits=True,
@@ -596,12 +616,12 @@ CFolding  Loss/Acc:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}
             logits_processor=[logits_processor],
         ) # type: ignore
         
-        target_token_ids = inputs['labels'][0, prompt_length :]                         # <struct>....</struct>
-        ar_token_ids = ar.sequences[0, prompt_length : -1]                              # <struct>....</struct>
-        ar_acc = (ar_token_ids == target_token_ids).float().mean().item()
+        tar_token_ids = inputs['labels'][0, prompt_length :]                        # <struct>....</struct>
+        ar_token_ids = ar.sequences[0, prompt_length : -1]                          # <struct>....</struct>
+        ar_acc = (ar_token_ids == tar_token_ids).float().mean().item()
         ar_bleu = sacrebleu.corpus_bleu(
             [" ".join(map(str, ar_token_ids.cpu().tolist()))],
-            [[" ".join(map(str, target_token_ids.cpu().tolist()))]]
+            [[" ".join(map(str, tar_token_ids.cpu().tolist()))]]
         ).score
         
         split, pdb_name, device = inputs['split'][0], inputs['pdb_name'][0], inputs['input_ids'].device
@@ -611,7 +631,7 @@ CFolding  Loss/Acc:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}
         # so we should either move processor to cuda here, or
         # move protein back to cuda later (to counter processor's device move)
         self.processor.to(device)
-        p_vq = self.processor.multimodal_decode(target_token_ids, ref=p_nature)['entity'][0].to(device)
+        p_vq = self.processor.multimodal_decode(tar_token_ids, ref=p_nature)['entity'][0].to(device)
         p_ar = self.processor.multimodal_decode(ar_token_ids, ref=p_nature)['entity'][0].to(device)
         # ar ---- vq ---- nature, where the former is up to ar modeling, the latter is up to vq reconstruction
         tm_vq, rmsd_l_vq, rmsd_g_vq = self.processor.compute_tm_align(p_vq, p_nature, ref=p_nature)
@@ -630,7 +650,7 @@ CFolding  Loss/Acc:    {cfolding_loss.item():.4f}/{cfolding_acc:.4f}
         
         logger.info(
 f"""////// Evaluated [{inputs['pdb_name'][0]}] from [{inputs['split'][0]}] in {time.time() - start_time:.2f}s:) //////
-Target  Structure:          {self.processor.tokenizer.decode(target_token_ids.cpu().tolist()[:50])}...
+Target  Structure:          {self.processor.tokenizer.decode(tar_token_ids.cpu().tolist()[:50])}...
 AR      Structure:          {self.processor.tokenizer.decode(ar_token_ids.cpu().tolist()[:50])}...
 VQ v.s. Nature: TM-score =  {tm_vq:.4f}, RMSD_L = {rmsd_l_vq:.4f}, RMSD_G = {rmsd_g_vq:.4f}
 AR v.s. VQ:     TM-score =  {tm_ar:.4f}, RMSD_L = {rmsd_l_ar:.4f}, RMSD_G = {rmsd_g_ar:.4f}
@@ -675,66 +695,83 @@ AR v.s. Nature: TM-score =  {tm_final:.4f}, RMSD_L = {rmsd_l_final:.4f}, RMSD_G 
             loss2, metrics2, inputs2 = self._prediction_step_benchmark(model, inputs, prediction_loss_only, ignore_keys)
             merged_metrics = metrics1 | metrics2
             return (loss2, merged_metrics, inputs2)
-    
+     
+    @staticmethod
+    def _plm_metrics_keys():
+        return [
+            'sequence_loss',
+            'sequence_acc',
+        ]
+        
+    @staticmethod
+    def _slm_metrics_keys():
+        return [
+            'structure_loss',
+            'structure_acc',
+        ]
+        
+    @staticmethod
+    def _p2s_metrics_keys():
+        return [
+            'structure_loss',
+            'structure_acc',
+            'folding_loss',
+            'folding_acc',
+        ]
+        
+    @staticmethod
+    def _psps_metrics_keys():
+        return [
+            'structure_loss',
+            'structure_acc',
+            'folding_loss',
+            'folding_acc',
+            'cfolding_loss',
+            'cfolding_acc',
+        ]
+        
+    @staticmethod
+    def _benchmark_metrics_keys():
+        return [
+            'ar_acc',
+            'ar_bleu',
+            'tm_ar',
+            'tm_vq',
+            'tm_final',
+            'rmsd_ar',
+            'rmsd_vq',
+            'rmsd_final',
+            'folding_loss',
+            'folding_acc',
+            'structure_loss',
+            'structure_acc',
+        ]
     
     @classmethod
     def compute_metrics(cls, eval_pred: EvalPrediction):
         preds: Dict[str, np.ndarray] = eval_pred.predictions # type: ignore
         df = pd.DataFrame({k: v for k, v in preds.items()})
         metrics = {}
-
-        # TRICK: decide dataset type by checking metrics keys
-        is_benchmark = 'tm_ar' in df.columns
-        is_psps = 'cfolding_loss' in df.columns and not is_benchmark
-        is_p2s = 'folding_loss' in df.columns and not is_benchmark and not is_psps
-        is_plm = 'sequence_loss' in df.columns and not is_benchmark and not is_psps and not is_p2s
-        is_slm = 'structure_loss' in df.columns and not is_benchmark and not is_psps and not is_p2s
-        
-        if is_benchmark:
+        # TRICK: decide dataset type by key combinations    
+        if all(k in df.columns for k in cls._benchmark_metrics_keys()):
             logger.info(f"[{len(df)}rows] Computing metrics for protein folding benchmark tasks.")
-            # for benchmarks, report mean & std
-            metrics['ar_acc']       = df['ar_acc'].mean()
-            metrics['ar_bleu']      = df['ar_bleu'].mean()
-            metrics['tm_ar_mean']   = df['tm_ar'].mean()
-            metrics['tm_vq_mean']   = df['tm_vq'].mean()
-            metrics['tm_final_mean'] = df['tm_final'].mean()
-            metrics['rmsd_ar_mean'] = df['rmsd_ar'].mean()
-            metrics['rmsd_vq_mean'] = df['rmsd_vq'].mean()
-            metrics['structure_loss'] = df['structure_loss'].mean()
-            metrics['structure_acc']  = df['structure_acc'].mean()
-            metrics['folding_loss']   = df['folding_loss'].mean()
-            metrics['folding_acc']    = df['folding_acc'].mean()
-            if 'cfolding_loss' in df.columns:          
-                metrics['cfolding_loss']  = df['cfolding_loss'].mean()
-                metrics['cfolding_acc']   = df['cfolding_acc'].mean()
-            
-        elif is_psps:
+            metrics.update({k: df[k].mean() for k in cls._benchmark_metrics_keys()})
+        elif all(k in df.columns for k in cls._psps_metrics_keys()):
             logger.info(f"[{len(df)}rows] Computing metrics for protein sequence-to-structure with context task.")
-            metrics['structure_loss'] = df['structure_loss'].mean()
-            metrics['structure_acc']  = df['structure_acc'].mean()
-            metrics['folding_loss']   = df['folding_loss'].mean()
-            metrics['folding_acc']    = df['folding_acc'].mean()             
-            metrics['cfolding_loss']  = df['cfolding_loss'].mean()
-            metrics['cfolding_acc']   = df['cfolding_acc'].mean()
-        elif is_p2s:
+            metrics.update({k: df[k].mean() for k in cls._psps_metrics_keys()}) 
+        elif all(k in df.columns for k in cls._p2s_metrics_keys()):
             logger.info(f"[{len(df)}rows] Computing metrics for protein sequence-to-structure task.")
-            metrics['structure_loss'] = df['structure_loss'].mean()
-            metrics['structure_acc']  = df['structure_acc'].mean()
-            metrics['folding_loss']   = df['folding_loss'].mean()
-            metrics['folding_acc']    = df['folding_acc'].mean()
-        elif is_plm:
+            metrics.update({k: df[k].mean() for k in cls._p2s_metrics_keys()})
+        elif all(k in df.columns for k in cls._plm_metrics_keys()):
             logger.info(f"[{len(df)}rows] Computing metrics for protein language modeling task.")
-            metrics['sequence_loss']  = df['sequence_loss'].mean()
-            metrics['sequence_acc']   = df['sequence_acc'].mean()
-        elif is_slm:
+            metrics.update({k: df[k].mean() for k in cls._plm_metrics_keys()})
+        elif all(k in df.columns for k in cls._slm_metrics_keys()):
             logger.info(f"[{len(df)}rows] Computing metrics for structure language modeling task.")
-            metrics['structure_loss'] = df['structure_loss'].mean()
-            metrics['structure_acc']  = df['structure_acc'].mean()
+            metrics.update({k: df[k].mean() for k in cls._slm_metrics_keys()})
         else:
             raise NotImplementedError("Unknown evaluation prediction format found during metrics computation.")
         return metrics
 
-    
     @classmethod
     def formatting_func_concatenate_templates(cls, example: Dict[str, List[Any]]) -> List[str] | str:
         if isinstance(example['text'], str):
