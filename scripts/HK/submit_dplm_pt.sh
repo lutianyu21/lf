@@ -111,20 +111,11 @@ for pkg in colorlog ray einx; do
 done
 
 OPENFOLD_DIR="/GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold"
-if [ -d "$OPENFOLD_DIR" ]; then
-    if python -c "import openfold" &>/dev/null; then
-        echo "✅ openfold already installed, skip."
-    else
-        echo "⬇️ Installing local openfold..."
-        $PIP install -e "$OPENFOLD_DIR" \
-            --no-build-isolation \
-            --trusted-host pypi.org \
-            --trusted-host pypi.python.org \
-            --trusted-host files.pythonhosted.org
-    fi
-else
-    echo "⚠️ openfold path not found: $OPENFOLD_DIR"
-fi
+$PIP install -e "$OPENFOLD_DIR" \
+    --no-build-isolation \
+    --trusted-host pypi.org \
+    --trusted-host pypi.python.org \
+    --trusted-host files.pythonhosted.org
 
 echo "=== Runnig task ==="
 cd /GenSIvePFS/users/lutianyu/lf
