@@ -8,7 +8,7 @@ defaults:
 name: dplm@pt@0107
 
 lm:
-  model_dir: /GenSIvePFS/model/Qwen3-4B
+  model_dir: /GenSIvePFS/users/lutianyu/lf/utils/qwen_utils/checkpoints//qwen3/Qwen3-4B
 
 hydra:
   output_subdir: null
