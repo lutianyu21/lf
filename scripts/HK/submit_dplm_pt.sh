@@ -86,7 +86,9 @@ done
 echo "================================"
 
 PIP=/root/miniconda3/envs/qwen3/bin/pip
-export TMPDIR=/GenSIvePFS/users/lutianyu/tmp
+export TMPDIR=/tmp
+export TORCH_EXTENSIONS_DIR=/tmp/torch_extensions_openfold
+export MAX_JOBS=1
 
 $PIP install trl==0.9.6 \
     --trusted-host pypi.org \
