@@ -71,9 +71,9 @@ pip config list
 
 echo "=== Cleaning previous builds ==="
 paths=(
-  "/home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/build"
-  "/home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/openfold.egg-info"
-  "/home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/attn_core_inplace_cuda.cpython-310-x86_64-linux-gnu.so"
+  "/GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/build"
+  "/GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/openfold.egg-info"
+  "/GenSIvePFS/users/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/attn_core_inplace_cuda.cpython-310-x86_64-linux-gnu.so"
 )
 for p in "${paths[@]}"; do
   if [ -e "$p" ]; then
