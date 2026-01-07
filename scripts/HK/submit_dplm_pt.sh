@@ -69,6 +69,22 @@ pip config list
 pip config set global.index-url https://pypi.org/simple
 pip config list
 
+echo "=== Cleaning previous builds ==="
+paths=(
+  "/home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/build"
+  "/home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/openfold.egg-info"
+  "/home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/attn_core_inplace_cuda.cpython-310-x86_64-linux-gnu.so"
+)
+for p in "${paths[@]}"; do
+  if [ -e "$p" ]; then
+    echo "Removing $p"
+    rm -rf "$p"
+  else
+    echo "Skip (not found): $p"
+  fi
+done
+echo "================================"
+
 PIP=/root/miniconda3/envs/qwen3/bin/pip
 export TMPDIR=/GenSIvePFS/users/lutianyu/tmp
 
@@ -123,12 +139,6 @@ conda run -n qwen3 torchrun \
 echo "=== torchrun command executed ==="
 EOF
 )
-
-echo "=== Cleaning previous builds ==="
-rm -r /home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/build && \
-rm -r /home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/openfold.egg-info && \
-rm /home/projects/su4-protein/lutianyu/lf/utils/dplm_utils/dplm/vendor/openfold/attn_core_inplace_cuda.cpython-310-x86_64-linux-gnu.so
-echo "================================"
 
 
 # Check and create container if not exists on each node(requires few resources, nxpxc = nx1x1):
